@@ -1,0 +1,152 @@
+# Technical Architecture
+
+StoneDesk is a multi-tenant web app: a React + Vite single-page client talks to an Express 5 API, which stores data in MongoDB through Mongoose schemas. Each business (organization) is isolated by `organizationId`.
+
+## 1. Directory Structure
+
+```text
+StoneDesk/
+  Backend/                      Node.js + Express 5 API
+    app.js                      Express app: middleware pipeline, route mounting, error handler
+    server.js                   Listener and process lifecycle
+    controllers/
+      dispatchController.js     Loads (dispatches): drafts, finalize, status, list, analytics
+      loadingListController.js  Loading requirement lists
+      masterSettingsController.js
+    models/                     Mongoose document schemas
+      User.js, MasterSettings.js, Dispatch.js, LoadingList.js,
+      InvoicePayment.js, Session.js, Invitation.js, PasswordResetToken.js, AuditLog.js
+    routes/
+      authRoutes.js             Signup, login, users, password reset, account delete
+      dispatchRoutes.js
+      loadingListRoutes.js
+      masterSettingsRoutes.js   Business profile, logo, trucks, destinations, stone rates, royalty
+    utils/
+      auth.js                   Sessions, scrypt hashing, requireSession / requireActive / allowRoles
+      db.js                     MongoDB Mongoose connection lifecycle
+      prisma.js                 Mongoose data access adapter providing Prisma-compatible interface
+      pilotCalculations.js      Server-side measurement validation and bill totals
+      dispatchCalculations.js   Legacy piece-based totals
+      dispatchAnalytics.js      30-day dashboard analytics (IST)
+      organizationCode.js       Shareable organization code generator
+      businessBranding.js       Logo upload storage (sharp, content-addressed), business snapshot with logo reference
+      logoStorage.js            Local UPLOAD_DIR; org/<orgId>/<sha256>.png objects
+      serveContentLogo.js       Serves /uploads/logos/<sha256>.png from the caller's organization folder
+      requireOrganizationLogo.js Restricts /uploads/<uuid>.png to the caller's current logo
+      rateLimiter.js            Upstash Redis sliding window, in-memory fallback with LRU eviction
+      securityHeaders.js        CSP and security headers
+      auditLog.js, email.js, errorHandler.js
+    scripts/
+      checkDatabase.js          npm run db:check
+      repairOrganizationSettings.js, e2ePreview.js, seedMongo.js
+    mock/                       Mock API server (npm run mock) and fixture data
+    tests/                      node:test suites (auth, dispatch, multiTenancy, securityBoundary, ...)
+  Frontend/                     React 19 + Vite 8 + Tailwind CSS 4 + daisyUI 5
+    index.html
+    vite.config.js              Dev proxy /api -> http://localhost:5000
+    securityPolicy.js           Generates the Content Security Policy
+    scripts/generateA4InvoiceSample.mjs   npm run invoice:sample
+    public/                     Favicon, icons, sample invoice
+    src/
+      main.jsx                  Mounts App
+      App.jsx                   Checks /auth/session, renders LandingPage or PilotApp
+      index.css                 Design tokens and shared controls
+      styles/                   workspace.css, landing.css, invoice.css, a4Invoice.css
+      components/
+        pilot/                  Active application (see section 5)
+        LoadingListScreen.jsx   Loading requirements screen (lazy loaded at #requirements)
+        SettingsScreen.jsx      Old saved trucks and destinations screen; no longer imported by the app
+        dispatch/               FractionChips, used by LoadingListScreen
+      lib/
+        pilotApi.js             Fetch wrapper used by the pilot app
+        api.js, loadingListApi.js   Clients used by LoadingListScreen / NewLoad
+        googleSignIn.js         Google PKCE redirect helpers
+      utils/                    Calculations, drafts and document exports (see section 6)
+        workspaceRoutes.js      Hash route, tab and navigation helpers
+        truckPlate.js           Truck plate formatting and validation
+    tests/                      node:test suites (invoice exports, calculation parity, CSP, ...)
+  docs/                         PRD, architecture, workflows, design and UX notes
+```
+
+## 2. Runtime and Request Pipeline
+
+`Backend/app.js` applies middleware in this order:
+
+1. Security headers (`utils/securityHeaders.js`).
+2. Origin check: any request with an `Origin` header not allowed by `auth.allowedOrigin` (based on `APP_ORIGIN`, required in production) gets 403.
+3. `cors({ origin: true, credentials: true })`.
+4. `express.json` with a 100 kb body limit.
+5. `/api` router: rejects JSON bodies that are not objects, sets `Cache-Control: no-store`, then mounts:
+   - `/api/auth` (public and session routes)
+   - `/api/master-settings/:quarryId` (session + active user)
+   - `/api/dispatches` (session + active user)
+   - `/api/loading-lists` (session + active user)
+6. `/uploads/logos/<sha256>.png`: session + active user, then the object `org/<session organization>/<sha256>.png` (404 if missing) with `private, max-age=31536000, immutable`. Finalized bills reference these by `businessSnapshot.logo.sha256`, so historical logos stay viewable for the same organization.
+   `/uploads/<uuid>.png` (legacy): session + active user + current-logo check, then static files from `UPLOAD_DIR`, with `private, no-store`.
+7. When `SERVE_FRONTEND=true`, serves `Frontend/dist` with an SPA fallback.
+8. Central error handler (`utils/errorHandler.js`).
+
+Default port is `5000`. In development, Vite (port 5173) proxies `/api` to the backend.
+
+## 3. Data Model (MongoDB / Mongoose)
+
+| Model | Purpose | Key fields |
+| --- | --- | --- |
+| `MasterSettings` | Tenant root (organization) | `_id` (UUID), `organizationId` (unique shareable code), `businessName`, `address`, `phone`, `gstNumber`, `tradeLicense`, `logoPath`, `savedTrucks[]`, `savedDestinations[]`, `stoneRates` (Map), `defaultRoyaltyFee`, `version` |
+| `User` | Member of one organization | `organizationId` -> `MasterSettings.id`, `email` (unique), `passwordHash`, `passwordSalt`, `role` (`Admin`, `YardManager`, `Dispatcher`), `active` |
+| `Session` | Cookie session | `tokenHash`, `expiresAt`, `userId` |
+| `PasswordResetToken` | Password reset | Single use, expires after 1 hour |
+| `Dispatch` | A truck load and its bill | `dispatchSlipNumber` (unique per org), `clientRequestId` (unique idempotency key), `status` (`Draft`, `Dispatched`, `Delivered`), `partyName`, `logistics`, `inventory`, `summary`, `businessSnapshot` (Object) |
+| `LoadingList` | Size requirements to load | `loadingListNumber` (unique per org), `supervisor`, `buyerDestination`, `stoneType`, `finish`, `requirements` (Object), `status` (`Draft`, `Loading`, `Completed`) |
+| `AuditLog` | Security and business audit trail | `organizationId`, `userId`, `action`, timestamp (indexed) |
+
+Every query on tenant data is scoped by the caller's `organizationId`.
+
+## 4. Security
+
+- **Sessions:** `stonedesk_session` cookie, `httpOnly`, `SameSite=Lax`, 12 hours. Only a hash of the token is stored.
+- **Passwords:** scrypt (N=32768). 12 to 128 characters with a zxcvbn score of at least 3.
+- **Rate limiting:** 20 requests per 15 minutes on auth endpoints (Upstash Redis; in-memory fallback with LRU eviction).
+- **Authorization:** `requireSession`, `requireActive` (paused users get 403 on workspace APIs) and `allowRoles(...)`.
+- **Browser:** CSP generated by `Frontend/securityPolicy.js`; security headers on API and static responses.
+
+## 5. Frontend Application
+
+`App.jsx` calls `/api/auth/session`. Signed-out users see `pilot/LandingPage.jsx` with `pilot/AuthDialog.jsx`; signed-in users get `pilot/PilotApp.jsx`, which uses hash routing:
+
+| Hash | Screen | Notes |
+| --- | --- | --- |
+| `#home` | `LoadHub` + `DashboardAnalytics` | Dashboard with 30-day analytics |
+| `#entries` | `LoadHub` | Load list, `?status=` filter, cursor pagination |
+| `#load` | `NewLoad` + `MeasurementEntry` + `LoadSummary` | Create or edit a draft load |
+| `#bill/:id` | `BillView` | Bill preview, finalize, PDF/Excel/share |
+| `#products`, `#products/...` | (redirect) | Legacy aliases; replaced with `#settings/products` |
+| `#profile` | `BusinessSetup` | Admin only; Profile settings (sidebar item): business profile, logo and default charges |
+| `#references` | (redirect) | Legacy alias; replaced with `#settings/products` |
+| `#requirements` | `LoadingListScreen` | Loading requirement lists |
+| `#settings/...` | `AccountSettings` | Organization, Products & rates (`#settings/products`, `ProductSettings`: Admin full, Manager add-only, hidden for Dispatcher), team members, account, delete |
+
+`WorkspaceShell.jsx` provides the header and drawer navigation: Profile (Admin), Dashboard, New load, Loading entries, Settings. The New load item runs the same `newLoad()` as the header button. Until the business has a name, the app redirects to setup (`#profile`); a business without products can still open New load. Truck numbers and destinations are remembered automatically when a load is saved and offered as New load suggestions. Unsaved load drafts are kept in `localStorage` (`utils/pilotDraft.js`) and offered for recovery.
+
+## 6. Calculations and Documents
+
+- **Server authority:** `Backend/utils/pilotCalculations.js` validates every measurement row and computes totals. Area per row is L x W x quantity; values are summed unrounded and rounded half-up to 2 decimals once.
+- **Client parity:** `Frontend/src/utils/loadMath.js`, `billData.js` and `fractionParser.js` mirror the server math for live previews; `tests/calculationParity.test.js` guards parity.
+- **Exports:** `pilotExports.js` (buyer PDF, buyer Excel, driver PDF via `ledgerPdf.js` and SheetJS), `a4InvoiceModel.js` / `a4InvoicePagination.js` / `a4InvoiceRender.js` (printable A4 invoice), `generateLoadingListPdf.js` / `generateLoadingListExcel.js`, and `shareFiles.js` (Web Share API).
+
+## 7. Configuration
+
+| Area | Variables |
+| --- | --- |
+| Backend server | `PORT`, `NODE_ENV`, `APP_ORIGIN`, `TRUST_PROXY`, `SERVE_FRONTEND`, `UPLOAD_DIR` |
+| Database | `DATABASE_URL` (MongoDB connection URI) |
+| Rate limiting | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` |
+| Email | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` |
+| Frontend | `VITE_API_BASE_URL` (default `/api`) |
+
+## 8. Testing
+
+- Backend: `npm test` runs `node --test --test-concurrency=1 tests/*.test.js`.
+- Frontend: `node --test` suites in `Frontend/tests` and `Frontend/src/utils/*.test.js`; `npm run lint` runs oxlint.
+
+See [DESIGN.md](DESIGN.md) for the design system and [BUSINESS-WORKFLOWS.md](BUSINESS-WORKFLOWS.md) for business flows.

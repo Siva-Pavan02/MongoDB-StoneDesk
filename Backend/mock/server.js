@@ -1,0 +1,1191 @@
+// Mock StoneDesk API. Mimics the real Express API (same routes, validation and
+// calculations) but stores data in Backend/mock/mock-data.json instead of MongoDB.
+// Delete mock-data.json to reset to the seed data. Run with: npm run mock
+const express = require("express");
+const cors = require("cors");
+const fs = require("node:fs");
+const path = require("node:path");
+const { randomUUID, randomBytes, createHash } = require("node:crypto");
+const zxcvbn = require("zxcvbn");
+class Decimal {
+  constructor(val) { this.val = Number(val); }
+  toFixed(digits) { return this.val.toFixed(digits); }
+  lessThanOrEqualTo(other) { return this.val <= (other?.val ?? Number(other)); }
+  greaterThan(other) { return this.val > (other?.val ?? Number(other)); }
+}
+const calc = require("../utils/pilotCalculations");
+const { round2 } = require("../utils/dispatchCalculations");
+// Shared with the real controller so money rounding and status cannot drift.
+const { derivePaymentSummary } = require("../utils/paymentSummary");
+const { organizationCode } = require("../utils/organizationCode");
+const { buildAnalytics, windows } = require("../utils/dispatchAnalytics");
+const { authFlags, requiresCurrentPassword, buildResetUrl } = require("../utils/authFlags");
+const { STATUS_TARGETS, statusTransitionError } = require("../utils/dispatchStatus");
+const { canAddProduct } = require("../utils/roles");
+const { MAX_SAVED_REFERENCES, referenceKey, removeReference, rememberReference } = require("../utils/savedReferences");
+
+const PORT = process.env.MOCK_PORT || 5001;
+const DATA_FILE = path.join(__dirname, "mock-data.json");
+const ORG = "unit_04";
+const now = () => new Date().toISOString();
+
+function seed() {
+  const inventory = calc.processInventory([
+    {
+      stoneType: "Granite",
+      finish: "Polished",
+      ratePerSqFt: 40.5,
+      measurementRows: [
+        { lengthFt: 3, widthFt: 2, quantity: 12, category: "Regular" },
+        { lengthFt: 4, widthFt: 2, quantity: 8, category: "TOP" },
+      ],
+    },
+  ]);
+  return {
+    users: [
+      {
+        id: "user_001",
+        name: "Mock Admin",
+        email: "admin@example.test",
+        role: "Admin",
+        active: true,
+        organizationId: ORG,
+        createdAt: now(),
+      },
+      {
+        id: "user_002",
+        name: "Mock Dispatcher",
+        email: "dispatcher@example.test",
+        role: "Dispatcher",
+        active: true,
+        organizationId: ORG,
+        createdAt: now(),
+      },
+    ],
+    settings: {
+      id: ORG,
+      organizationId: organizationCode("Original Stone Works"),
+      version: 1,
+      businessName: "Original Stone Works",
+      address: "Kadapa, Andhra Pradesh",
+      phone: "+91 98765 43210",
+      bankDetails: "UPI: originalstone@upi",
+      gstNumber: "",
+      tradeLicense: "",
+      defaultRoyaltyFee: 2500,
+      logoPath: null,
+      stoneRates: [
+        {
+          id: "rate_01",
+          stoneType: "Granite",
+          finish: "Polished",
+          defaultRate: 40.5,
+        },
+        {
+          id: "rate_02",
+          stoneType: "Kota",
+          finish: "Natural",
+          defaultRate: 32,
+        },
+        {
+          id: "rate_03",
+          stoneType: "Basalt",
+          finish: "Flamed",
+          defaultRate: 28.75,
+        },
+      ],
+      savedTrucks: ["AP 37 TA 4312", "TS 09 AB 1203"],
+      savedDestinations: ["Kadapa", "Tirupati", "Hyderabad"],
+    },
+    dispatches: [
+      {
+        id: "dispatch_001",
+        organizationId: ORG,
+        clientRequestId: "seed-request-001",
+        dispatchSlipNumber: "GS-seed-0001",
+        date: "2026-10-06T00:00:00.000Z",
+        supervisor: "Ramesh Kumar",
+        partyName: "Venkata Granites",
+        logistics: { truckNumber: "AP 37 TA 4312", buyerDestination: "Kadapa" },
+        status: "Dispatched",
+        inventory,
+        summary: calc.totals(inventory, 2500),
+        businessSnapshot: null,
+        revisions: [],
+        createdAt: now(),
+        updatedAt: now(),
+      },
+    ],
+    loadingLists: [],
+  };
+}
+
+function load() {
+  try {
+    return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+  } catch {
+    return seed();
+  }
+}
+const db = load();
+db.invitations ||= [];
+db.payments ||= [];
+// Older mock-data.json files predate the revisions field (default [] in MongoDB).
+for (const d of db.dispatches) if (!Array.isArray(d.revisions)) d.revisions = [];
+// Older mock-data.json files predate the bankDetails field (default '' in MongoDB).
+db.settings.bankDetails ??= "";
+const inviteHash = token => createHash("sha256").update(token).digest("hex");
+// Reset tokens live only in memory for the mock process: never persisted to
+// mock-data.json and never returned to a client. Keyed by sha256(token).
+const resetTokens = new Map();
+function save() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
+}
+save();
+
+// The mock has one signed-in session. Logout makes /auth/me return 401 until login/signup.
+let session = db.users[0].id;
+const currentUser = () => db.users.find((u) => u.id === session && u.active);
+const publicUser = (u) => ({
+  id: u.id,
+  name: u.name,
+  email: u.email,
+  role: u.role === "YardManager" ? "Yard Manager" : u.role,
+  active: u.active,
+  organizationId: u.organizationId,
+  isOwner: u.role === "Admin",
+  ...authFlags(u),
+  createdAt: u.createdAt,
+});
+
+const app = express();
+app.disable("x-powered-by");
+// Same rule as utils/auth.allowedOrigin (not imported: it loads the database adapter). Browsers
+// send Origin on every cross-origin and state-changing request, so rejecting
+// unknown origins before cors() is the CSRF check, together with SameSite=strict.
+const allowedOrigin = (origin, req) => {
+  if (!origin || origin === process.env.APP_ORIGIN) return true;
+  try {
+    const url = new URL(origin);
+    if (url.origin !== origin || !["http:", "https:"].includes(url.protocol)) return false;
+    return ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) || origin === `${req.protocol || "http"}://${req.get("host")}`;
+  } catch { return false; }
+};
+app.use((req, res, next) => {
+  if (req.headers.origin && !allowedOrigin(req.headers.origin, req)) return res.status(403).json({ error: "Origin not allowed" });
+  next();
+});
+app.use(cors({ origin: true, credentials: true, maxAge: 600 }));
+app.use(express.json({ limit: "100kb" }));
+
+const api = express.Router();
+api.use((req, res, next) => {
+  if (
+    req.is("application/json") &&
+    (req.body === null ||
+      Array.isArray(req.body) ||
+      (req.body !== undefined && typeof req.body !== "object"))
+  )
+    return res.status(400).json({ error: "Expected a JSON object" });
+  if (req.body === undefined) req.body = {};
+  res.set("Cache-Control", "no-store");
+  next();
+});
+
+const wrap = (fn) => (req, res) => {
+  try {
+    fn(req, res);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+};
+const fail = (status, message) => {
+  throw Object.assign(new Error(message), { status });
+};
+const requireSession = (req, res, next) =>
+  currentUser()
+    ? next()
+    : res.status(401).json({ error: "Sign in to continue" });
+const requireAdmin = (req, res, next) =>
+  currentUser().role === "Admin"
+    ? next()
+    : res.status(403).json({ error: "You do not have access to this action" });
+
+api.get("/health", (req, res) => res.json({ ok: true, mode: "mock" }));
+
+// ---- auth ----
+function credentials(body = {}, checkStrength = true) {
+  const email =
+    typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const password = body.password;
+  if (
+    email.length > 254 ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+    typeof password !== "string" ||
+    password.length < 12 ||
+    password.length > 128
+  )
+    fail(400, "Enter a valid email and a password of 12 to 128 characters");
+  const strength = zxcvbn(password);
+  if (checkStrength && strength.score < 3)
+    fail(
+      400,
+      "Password is too weak. " +
+        (strength.feedback?.warning ||
+          "Use a stronger password with mixed case, numbers, and symbols."),
+    );
+  return { email, password };
+}
+api.post(
+  "/auth/signup",
+  wrap((req, res) => {
+    const { email } = credentials(req.body);
+    const name = typeof req.body.name === "string" ? req.body.name.trim() : "";
+    const token = req.body.invitationToken;
+    const create =
+      req.body.createOrganization === true ||
+      req.body.createOrganization === "true";
+    const businessName =
+      typeof req.body.businessName === "string"
+        ? req.body.businessName.trim()
+        : "";
+    if (!name || name.length > 120)
+      fail(400, "Enter your name (up to 120 characters)");
+    if (create && (!businessName || businessName.length > 120))
+      fail(400, "Enter your business name (up to 120 characters)");
+    if (!create && (typeof token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(token))) fail(400, "Enter a valid invitation code");
+    if (db.users.some((u) => u.email === email))
+      fail(409, "Unable to create this account. Try signing in.");
+    let target = db.settings;
+    const invitation = !create && db.invitations.find(i => i.tokenHash === inviteHash(token) && i.email === email && !i.usedAt && !i.revokedAt && new Date(i.expiresAt) > new Date() && db.users.some(u => u.id === i.issuedById && u.active && u.role === "Admin"));
+    if (!create && !invitation) fail(400, "Invitation is invalid, expired, used, or does not match your email.");
+    if (create) {
+      // The mock holds a single organization; a new workspace renames and resets it.
+      Object.assign(db.settings, {
+        organizationId: organizationCode(businessName),
+        businessName,
+        stoneRates: [],
+        savedTrucks: [],
+        savedDestinations: [],
+      });
+      db.dispatches = [];
+      db.loadingLists = [];
+    }
+    const user = {
+      id: "user_" + randomUUID().slice(0, 8),
+      name,
+      email,
+      role: create ? "Admin" : invitation.role,
+      active: true,
+      organizationId: target.id,
+      createdAt: now(),
+    };
+    if (create) db.users = [user];
+    else { db.users.push(user); invitation.usedAt = now(); }
+    session = user.id;
+    save();
+    res
+      .status(201)
+      .json({
+        user: publicUser(user),
+        organizationCode: db.settings.organizationId,
+      });
+  }),
+);
+api.post(
+  "/auth/login",
+  wrap((req, res) => {
+    const { email } = credentials(req.body, false);
+    const user = db.users.find((u) => u.email === email && u.active);
+    if (!user) fail(401, "Email or password is incorrect");
+    session = user.id;
+    res.json({ user: publicUser(user) });
+  }),
+);
+api.post("/auth/logout", (req, res) => {
+  session = null;
+  res.json({ ok: true });
+});
+api.get("/auth/me", requireSession, (req, res) =>
+  res.json({ user: publicUser(currentUser()) }),
+);
+api.get("/auth/session", (req, res) =>
+  res.json({ user: currentUser() ? publicUser(currentUser()) : null }),
+);
+api.post(
+  "/auth/password",
+  requireSession,
+  wrap((req, res) => {
+    const user = currentUser();
+    credentials({ email: user.email, password: req.body.password });
+    if (requiresCurrentPassword(user)) {
+      if (
+        typeof req.body.currentPassword !== "string" ||
+        req.body.currentPassword.length > 128
+      )
+        fail(400, "Enter your current password");
+    }
+    user.passwordLogin = true;
+    save();
+    res.json({ ok: true });
+  }),
+);
+api.delete(
+  "/auth/account",
+  requireSession,
+  wrap((req, res) => {
+    const user = currentUser();
+    const confirm =
+      typeof req.body.confirm === "string"
+        ? req.body.confirm.trim().toLowerCase()
+        : "";
+    if (confirm !== user.email.toLowerCase())
+      fail(400, "Type your email exactly to confirm deletion");
+    const deleteBusiness = user.role === "Admin";
+    // The mock holds one organization; deleting the business restores the seed data.
+    if (deleteBusiness) Object.assign(db, seed());
+    else db.users = db.users.filter((u) => u.id !== user.id);
+    session = null;
+    save();
+    res.json({ ok: true, deletedBusiness: deleteBusiness });
+  }),
+);
+api.get("/auth/users", requireSession, requireAdmin, (req, res) =>
+  res.json(db.users.map(publicUser)),
+);
+// ---- invitations (mirror routes/authRoutes.js + utils/invitations.js) ----
+// Same fields as invitations.select; tokenHash and issuedById never leave the server.
+const publicInvitation = (i) => ({
+  id: i.id,
+  email: i.email,
+  role: i.role,
+  createdAt: i.createdAt,
+  expiresAt: i.expiresAt,
+  usedAt: i.usedAt ?? null,
+  revokedAt: i.revokedAt ?? null,
+});
+api.get("/auth/invitations", requireSession, requireAdmin, (req, res) =>
+  res.json(
+    db.invitations
+      .filter((i) => !i.usedAt && !i.revokedAt && new Date(i.expiresAt) > new Date())
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 50)
+      .map(publicInvitation),
+  ),
+);
+api.post(
+  "/auth/invitations",
+  requireSession,
+  requireAdmin,
+  wrap((req, res) => {
+    const email =
+      typeof req.body.email === "string" ? req.body.email.trim().toLowerCase() : "";
+    const role = req.body.role === "Yard Manager" ? "YardManager" : req.body.role;
+    if (
+      email.length > 254 ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+      !["Dispatcher", "YardManager"].includes(role)
+    )
+      fail(400, "Enter a valid email and staff role.");
+    const token = randomBytes(32).toString("base64url");
+    const invitation = {
+      id: randomUUID(),
+      email,
+      role,
+      tokenHash: inviteHash(token),
+      organizationId: ORG,
+      issuedById: currentUser().id,
+      createdAt: now(),
+      expiresAt: new Date(Date.now() + 7 * 86400000).toISOString(),
+      usedAt: null,
+      revokedAt: null,
+    };
+    db.invitations.push(invitation);
+    save();
+    // The plain token is returned once, at issue time, like the real route.
+    res.status(201).json({ ...publicInvitation(invitation), token });
+  }),
+);
+api.delete("/auth/invitations/:id", requireSession, requireAdmin, (req, res) => {
+  if (!/^[a-f0-9-]{36}$/i.test(req.params.id))
+    return res.status(404).json({ error: "Not found" });
+  const invitation = db.invitations.find(
+    (i) => i.id === req.params.id && !i.usedAt && !i.revokedAt,
+  );
+  if (!invitation) return res.status(404).json({ error: "Not found" });
+  invitation.revokedAt = now();
+  save();
+  res.json({ ok: true });
+});
+api.patch(
+  "/auth/users/:id",
+  requireSession,
+  requireAdmin,
+  wrap((req, res) => {
+    const role =
+      req.body.role === "Yard Manager" ? "YardManager" : req.body.role;
+    if (
+      !["Admin", "YardManager", "Dispatcher"].includes(role) ||
+      typeof req.body.active !== "boolean"
+    )
+      fail(400, "Choose a valid role and access status");
+    const user = db.users.find((u) => u.id === req.params.id);
+    if (!user) fail(404, "Account not found");
+    if (user.role === "Admin" || user.id === session)
+      fail(400, "You cannot change the owner or your own access");
+    Object.assign(user, { role, active: req.body.active });
+    save();
+    res.json(publicUser(user));
+  }),
+);
+api.post(
+  "/auth/forgot-password",
+  wrap((req, res) => {
+    const email =
+      typeof req.body.email === "string"
+        ? req.body.email.trim().toLowerCase()
+        : "";
+    if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      fail(400, "Enter a valid email address");
+    const user = db.users.find((u) => u.email === email && u.active);
+    if (user) {
+      const token = randomBytes(32).toString("hex");
+      resetTokens.set(inviteHash(token), {
+        userId: user.id,
+        email,
+        expiresAt: Date.now() + 3600000,
+        used: false,
+      });
+      // Same expression as the real route, defaulting to the mock port.
+      const appOrigin =
+        process.env.APP_ORIGIN ||
+        `${req.protocol}://${req.get("host") || "localhost:5001"}`;
+      console.log(
+        "[mock] Password reset link:",
+        buildResetUrl(appOrigin, token, email),
+      );
+    }
+    // Always identical for valid emails, so the response never reveals existence.
+    res.json({ ok: true });
+  }),
+);
+api.post(
+  "/auth/reset-password",
+  wrap((req, res) => {
+    credentials({ email: req.body.email, password: req.body.password });
+    const token = req.body.token;
+    const email =
+      typeof req.body.email === "string"
+        ? req.body.email.trim().toLowerCase()
+        : "";
+    const entry =
+      typeof token === "string" && /^[a-f0-9]{64}$/.test(token)
+        ? resetTokens.get(inviteHash(token))
+        : undefined;
+    const user = entry && db.users.find((u) => u.id === entry.userId && u.active);
+    if (
+      !entry ||
+      entry.used ||
+      entry.expiresAt <= Date.now() ||
+      entry.email !== email ||
+      !user
+    )
+      fail(400, "Invalid or expired reset token");
+    entry.used = true;
+    user.passwordLogin = true;
+    if (session === user.id) session = null;
+    save();
+    res.json({ ok: true });
+  }),
+);
+
+// ---- master settings ----
+const settingsRouter = express.Router({ mergeParams: true });
+const bump = (s) => {
+  s.version = (s.version || 0) + 1;
+};
+const settingsRoute = (method, route, fn) =>
+  settingsRouter[method](
+    route,
+    wrap((req, res) => {
+      fn(db.settings, req);
+      bump(db.settings);
+      save();
+      res.json(db.settings);
+    }),
+  );
+settingsRouter.get(
+  "/",
+  wrap((req, res) => {
+    if (
+      ![ORG, db.settings.id, db.settings.organizationId].includes(
+        req.params.quarryId,
+      )
+    )
+      fail(404, "Not found");
+    res.json(db.settings);
+  }),
+);
+// Mirrors masterSettingsRoutes: creating a product is Admin + Manager, everything below stays Admin-only.
+settingsRouter.post("/stone-rates", (req, res, next) =>
+  canAddProduct(currentUser()?.role)
+    ? next()
+    : res.status(403).json({ error: "Your role does not allow this action" }),
+);
+settingsRoute("post", "/stone-rates", (s, req) => {
+  const stoneType = calc.text(req.body.stoneType, "product"),
+    finish = calc.text(req.body.finish, "finish"),
+    defaultRate = calc.number(req.body.defaultRate, "rate");
+  if (
+    s.stoneRates.some((r) => r.stoneType === stoneType && r.finish === finish)
+  )
+    fail(409, "Duplicate stone-rate combination");
+  s.stoneRates.push({ id: randomUUID(), stoneType, finish, defaultRate });
+});
+settingsRouter.use(requireAdmin);
+settingsRoute("put", "/", (s, req) => {
+  for (const key of [
+    "savedTrucks",
+    "savedDestinations",
+    "stoneRates",
+    "defaultRoyaltyFee",
+  ])
+    if (req.body[key] !== undefined) {
+      if (key === "defaultRoyaltyFee")
+        s[key] = calc.number(req.body[key], "charges");
+      else if (key === "stoneRates")
+        s[key] = req.body[key].map((r) => ({
+          id: r.id || randomUUID(),
+          stoneType: calc.text(r.stoneType, "product"),
+          finish: calc.text(r.finish, "finish"),
+          defaultRate: calc.number(r.defaultRate, "rate"),
+        }));
+      else s[key] = [...new Set(req.body[key].map((v) => calc.text(v, key)))].slice(0, MAX_SAVED_REFERENCES);
+    }
+});
+settingsRoute("put", "/profile", (s, req) => {
+  // Validate everything before mutating db.settings, so a rejected save changes nothing.
+  const businessName = calc.text(req.body.businessName, "business name");
+  const str = (key) =>
+    typeof req.body[key] === "string" ? req.body[key].trim() : "";
+  const gstNumber = str("gstNumber").toUpperCase();
+  if (
+    gstNumber &&
+    !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(gstNumber)
+  )
+    fail(400, "Enter a valid 15-character GST number, or leave it blank");
+  if (str("tradeLicense").length > 80) fail(400, "Trade license is too long");
+  if (str("address").length > 300 || str("phone").length > 30)
+    fail(400, "Address or phone is too long");
+  // Mirrors masterSettingsController.updateProfile: trimmed, blank/omitted → '', limit after trim.
+  const bankDetails = str("bankDetails");
+  if (bankDetails.length > 300)
+    fail(400, "Bank details must be at most 300 characters");
+  const feeChange =
+    req.body.defaultRoyaltyFee === undefined
+      ? {}
+      : { defaultRoyaltyFee: calc.number(req.body.defaultRoyaltyFee, "charges") };
+  Object.assign(s, {
+    businessName,
+    address: str("address"),
+    phone: str("phone"),
+    bankDetails,
+    gstNumber,
+    tradeLicense: str("tradeLicense"),
+    ...feeChange,
+  });
+  if (req.body.removeLogo === true) s.logoPath = null;
+});
+settingsRoute("post", "/trucks", (s, req) => {
+  const v = calc.text(req.body.truckNumber, "truck number", 40).toUpperCase();
+  if (s.savedTrucks.some((t) => referenceKey("trucks", t) === referenceKey("trucks", v)))
+    fail(409, "Duplicate truck");
+  s.savedTrucks.push(v);
+});
+settingsRoute("delete", "/trucks/:truckNumber", (s, req) => {
+  s.savedTrucks = removeReference(s.savedTrucks, req.params.truckNumber, "trucks");
+});
+settingsRoute("post", "/destinations", (s, req) => {
+  const v = calc.text(req.body.destination, "destination", 200);
+  if (
+    s.savedDestinations.some(
+      (d) => referenceKey("destinations", d) === referenceKey("destinations", v),
+    )
+  )
+    fail(409, "Duplicate destination");
+  s.savedDestinations.push(v);
+});
+settingsRoute("delete", "/destinations/:destination", (s, req) => {
+  s.savedDestinations = removeReference(
+    s.savedDestinations,
+    req.params.destination,
+    "destinations",
+  );
+});
+settingsRoute("put", "/stone-rates/:rateId", (s, req) => {
+  const rate = s.stoneRates.find((r) => r.id === req.params.rateId);
+  if (!rate) fail(404, "Not found");
+  const stoneType =
+    req.body.stoneType === undefined
+      ? rate.stoneType
+      : calc.text(req.body.stoneType, "product");
+  const finish =
+    req.body.finish === undefined
+      ? rate.finish
+      : calc.text(req.body.finish, "finish");
+  const defaultRate = calc.number(req.body.defaultRate, "rate");
+  if (
+    s.stoneRates.some(
+      (r) =>
+        r.id !== rate.id && r.stoneType === stoneType && r.finish === finish,
+    )
+  )
+    fail(409, "Duplicate stone-rate combination");
+  Object.assign(rate, { stoneType, finish, defaultRate });
+});
+settingsRoute("delete", "/stone-rates/:rateId", (s, req) => {
+  s.stoneRates = s.stoneRates.filter((r) => r.id !== req.params.rateId);
+});
+settingsRoute("put", "/royalty", (s, req) => {
+  s.defaultRoyaltyFee = calc.number(req.body.defaultRoyaltyFee, "charges");
+});
+settingsRouter.post("/logo", (req, res) =>
+  res.status(400).json({ error: "Logo upload is not available in mock mode" }),
+);
+api.use("/master-settings/:quarryId", requireSession, settingsRouter);
+
+// ---- dispatches ----
+function details(body) {
+  const supervisor = calc.text(body.supervisor, "manager");
+  const logistics = {
+    truckNumber: calc
+      .text(body.logistics?.truckNumber, "truck number", 40)
+      .toUpperCase(),
+    buyerDestination: calc.text(
+      body.logistics?.buyerDestination,
+      "destination",
+      200,
+    ),
+  };
+  if (
+    body.date !== undefined &&
+    (typeof body.date !== "string" || !body.date.trim())
+  )
+    calc.bad("Invalid date");
+  const date = body.date === undefined ? new Date() : new Date(body.date);
+  if (!Number.isFinite(date.getTime())) calc.bad("Invalid date");
+  const isPilot =
+    Array.isArray(body.inventory) &&
+    body.inventory.some((g) => g?.measurementRows?.length);
+  const partyName =
+    isPilot || body.partyName !== undefined
+      ? calc.text(body.partyName, "party name")
+      : undefined;
+  return { supervisor, logistics, date: date.toISOString(), partyName };
+}
+const findDispatch = (id) => db.dispatches.find((d) => d.id === id);
+// Mirrors rememberDispatchReferences: remembers truck/destination as suggestions, bumps version when changed.
+function rememberMockReferences(logistics) {
+  const s = db.settings;
+  const trucks = rememberReference(s.savedTrucks, logistics?.truckNumber, "trucks");
+  const destinations = rememberReference(
+    s.savedDestinations,
+    logistics?.buyerDestination,
+    "destinations",
+  );
+  if (trucks) s.savedTrucks = trucks;
+  if (destinations) s.savedDestinations = destinations;
+  if (trucks || destinations) bump(s);
+}
+const LIST_FIELDS = [
+  "id",
+  "dispatchSlipNumber",
+  "date",
+  "supervisor",
+  "partyName",
+  "logistics",
+  "status",
+  "summary",
+  "createdAt",
+  "updatedAt",
+];
+const dispatches = express.Router();
+// Same role normalization and 403 body as the real allowRoles (utils/auth.js).
+const allow =
+  (...roles) =>
+  (req, res, next) =>
+    roles
+      .map((role) => role.replace("Yard Manager", "YardManager"))
+      .includes(currentUser().role)
+      ? next()
+      : res
+          .status(403)
+          .json({ error: "Your role does not allow this action" });
+
+dispatches.post(
+  "/",
+  wrap((req, res) => {
+    const { clientRequestId } = req.body;
+    if (
+      clientRequestId !== undefined &&
+      (typeof clientRequestId !== "string" ||
+        !/^[a-zA-Z0-9-]{8,80}$/.test(clientRequestId))
+    )
+      calc.bad("Invalid request ID");
+    const existing =
+      clientRequestId &&
+      db.dispatches.find((d) => d.clientRequestId === clientRequestId);
+    if (existing) return res.json(existing);
+    const meta = details(req.body);
+    const inventory = calc.processInventory(req.body.inventory);
+    if (
+      inventory.some((g) => g.measurementRows.length) &&
+      (!db.settings.businessName || !db.settings.stoneRates.length)
+    )
+      calc.bad("Set up business and at least one product first");
+    const fee =
+      req.body.loadingAndRoyaltyFees ?? db.settings.defaultRoyaltyFee ?? 0;
+    const record = {
+      id: "dispatch_" + randomUUID().slice(0, 8),
+      organizationId: ORG,
+      ...meta,
+      inventory,
+      ...(clientRequestId ? { clientRequestId } : {}),
+      dispatchSlipNumber: "GS-" + randomUUID(),
+      summary: calc.totals(inventory, fee),
+      businessSnapshot: null,
+      revisions: [],
+      status: "Draft",
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    db.dispatches.unshift(record);
+    rememberMockReferences(record.logistics);
+    save();
+    res.json(record);
+  }),
+);
+dispatches.get(
+  "/",
+  wrap((req, res) => {
+    const { status, cursor } = req.query;
+    if (status && !["Draft", "Dispatched", "Delivered"].includes(status))
+      calc.bad("Invalid status");
+    const limit = Math.min(
+      Math.max(parseInt(req.query.limit, 10) || 20, 1),
+      50,
+    );
+    let rows = db.dispatches.filter((d) => !status || d.status === status);
+    if (req.query.q !== undefined && (typeof req.query.q !== 'string' || req.query.q.length > 120)) calc.bad('Search must be at most 120 characters');
+    const search = req.query.q?.trim().toLowerCase();
+    if (search) rows = rows.filter(d => [d.partyName, d.dispatchSlipNumber, d.logistics?.truckNumber, d.logistics?.buyerDestination].some(value => value?.toLowerCase().includes(search)));
+    if (cursor) {
+      const i = rows.findIndex((d) => d.id === cursor);
+      rows = i >= 0 ? rows.slice(i + 1) : rows;
+    }
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    res.json({
+      data: page.map((d) =>
+        Object.fromEntries(LIST_FIELDS.map((k) => [k, d[k]])),
+      ),
+      nextCursor: hasMore ? page[page.length - 1].id : null,
+    });
+  }),
+);
+dispatches.get(
+  "/analytics",
+  wrap((req, res) => {
+    const at = new Date();
+    const range = windows(at);
+    const records = db.dispatches.filter((d) => {
+      const t = new Date(d.date);
+      return t >= range.start && t < range.end;
+    });
+    res.json(buildAnalytics(records, at));
+  }),
+);
+dispatches.get(
+  "/slip/:slip",
+  wrap((req, res) => {
+    const d = db.dispatches.find(
+      (x) => x.dispatchSlipNumber === req.params.slip,
+    );
+    if (!d) fail(404, "Not found");
+    res.json(d);
+  }),
+);
+dispatches.get(
+  "/:id",
+  wrap((req, res) => {
+    const d = findDispatch(req.params.id);
+    if (!d) fail(404, "Not found");
+    res.json(d);
+  }),
+);
+// Newest first, matching the real controller's orderBy createdAt desc.
+const dispatchPayments = (dispatchId) =>
+  db.payments
+    .filter((p) => p.dispatchId === dispatchId)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+const formatPayment = (p) => ({
+  id: p.id,
+  amount: Number(new Decimal(p.amount).toFixed(2)),
+  note: p.note ?? null,
+  createdAt: p.createdAt,
+  createdBy: p.createdBy ?? null,
+});
+const paymentsResponse = (dispatch) => {
+  const payments = dispatchPayments(dispatch.id);
+  return {
+    ...derivePaymentSummary(dispatch.summary?.netBillableAmount, payments),
+    payments: payments.map(formatPayment),
+  };
+};
+dispatches.get(
+  "/:id/payments",
+  wrap((req, res) => {
+    const d = findDispatch(req.params.id);
+    if (!d) fail(404, "Not found");
+    res.json(paymentsResponse(d));
+  }),
+);
+dispatches.post(
+  "/:id/payments",
+  allow("Admin", "Dispatcher"),
+  wrap((req, res) => {
+    const d = findDispatch(req.params.id);
+    // Amount and note are validated before the lookup, mirroring the real
+    // controller, which only reads the dispatch inside its transaction.
+    const rawAmount = req.body.amount;
+    if (
+      typeof rawAmount !== "number" ||
+      !Number.isFinite(rawAmount) ||
+      rawAmount <= 0
+    )
+      fail(400, "Invalid payment amount");
+    if (rawAmount > 10000000) fail(400, "Payment amount exceeds limit");
+    const payDecimal = new Decimal(round2(rawAmount).toFixed(2));
+    if (payDecimal.lessThanOrEqualTo(0)) fail(400, "Invalid payment amount");
+    let note = null;
+    if (req.body.note !== undefined && req.body.note !== null) {
+      if (typeof req.body.note !== "string") fail(400, "Invalid note");
+      const trimmed = req.body.note.trim();
+      if (trimmed.length > 255)
+        fail(400, "Note must be at most 255 characters");
+      note = trimmed || null;
+    }
+    if (!d) fail(404, "Not found");
+    if (d.status === "Draft")
+      fail(400, "Payments can only be recorded on finalized dispatches");
+    const current = derivePaymentSummary(
+      d.summary?.netBillableAmount,
+      dispatchPayments(d.id),
+    );
+    if (payDecimal.greaterThan(current.balance))
+      fail(
+        400,
+        `Payment exceeds remaining balance of ₹${current.balance.toFixed(2)}`,
+      );
+    db.payments.unshift({
+      id: "payment_" + randomUUID().slice(0, 8),
+      organizationId: ORG,
+      dispatchId: d.id,
+      amount: Number(payDecimal.toFixed(2)),
+      note,
+      createdBy: currentUser().name,
+      createdAt: now(),
+    });
+    save();
+    res.status(201).json(paymentsResponse(d));
+  }),
+);
+// Mirrors dispatchController.reviseDispatch. Registered before put('/:id').
+const FINALIZED_STATUSES = ["Dispatched", "Delivered"];
+dispatches.put(
+  "/:id/revise",
+  allow("Admin"),
+  wrap((req, res) => {
+    const d = findDispatch(req.params.id);
+    if (!d) fail(404, "Not found");
+    if (!FINALIZED_STATUSES.includes(d.status))
+      fail(409, "Only a finalized invoice can be revised.");
+    // Client's last-read timestamp: a stale edit must not overwrite a newer revision.
+    if (req.body.updatedAt !== undefined) {
+      const clientTime = new Date(req.body.updatedAt).getTime();
+      if (clientTime !== new Date(d.updatedAt).getTime())
+        fail(409, "Load changed. Refresh and try again.");
+    }
+    const { updatedAt: _clientUpdatedAt, ...body } = req.body;
+    const merged = { ...d, ...body };
+    if (d.partyName == null && !Object.hasOwn(body, "partyName"))
+      delete merged.partyName;
+    const meta = details(merged);
+    const inventory = calc.processInventory(merged.inventory);
+    const fee = body.loadingAndRoyaltyFees ?? d.summary?.loadingAndRoyaltyFees;
+    const summary = calc.totals(inventory, fee);
+    // Snapshot of the currently committed version, taken before applying new values.
+    const revisionSnapshot = {
+      inventory: d.inventory,
+      summary: d.summary,
+      logistics: d.logistics,
+      supervisor: d.supervisor,
+      partyName: d.partyName,
+      date: d.date,
+      // Like the real controller, revisions do not copy businessSnapshot.
+      revisedAt: new Date().toISOString(),
+      revisedByUserId: currentUser().id,
+    };
+    const revisions = [
+      ...(Array.isArray(d.revisions) ? d.revisions : []),
+      revisionSnapshot,
+    ];
+    // dispatchSlipNumber and status are intentionally left unchanged.
+    Object.assign(d, meta, { inventory, summary, revisions, updatedAt: now() });
+    rememberMockReferences(meta.logistics);
+    save();
+    res.json(d);
+  }),
+);
+// Mirrors dispatchController.deleteDispatch.
+dispatches.delete(
+  "/:id",
+  wrap((req, res) => {
+    const id = req.params.id;
+    const index = db.dispatches.findIndex((d) => d.id === id);
+    if (index < 0) fail(404, "Not found");
+    // Any role may delete a Draft; only Admin may delete a finalized invoice.
+    if (db.dispatches[index].status !== "Draft" && currentUser().role !== "Admin")
+      fail(403, "Your role does not allow this action");
+    const paymentsRemoved = db.payments.filter((p) => p.dispatchId === id).length;
+    if (paymentsRemoved && currentUser().role !== "Admin")
+      fail(403, "Only an Admin can delete a load with recorded payments.");
+    // Admin delete removes the load's payments with it.
+    db.payments = db.payments.filter((p) => p.dispatchId !== id);
+    db.dispatches.splice(index, 1);
+    save();
+    res.json({ ok: true, id, paymentsRemoved });
+  }),
+);
+dispatches.put(
+  "/:id",
+  wrap((req, res) => {
+    const d = findDispatch(req.params.id);
+    if (!d) fail(404, "Not found");
+    if (d.status !== "Draft") fail(400, "Only Draft can be modified");
+    const merged = { ...d, ...req.body };
+    if (d.partyName == null && !Object.hasOwn(req.body, "partyName"))
+      delete merged.partyName;
+    const meta = details(merged);
+    const inventory = calc.processInventory(merged.inventory);
+    const fee =
+      req.body.loadingAndRoyaltyFees ?? d.summary.loadingAndRoyaltyFees;
+    Object.assign(d, meta, {
+      inventory,
+      summary: calc.totals(inventory, fee),
+      updatedAt: now(),
+    });
+    rememberMockReferences(meta.logistics);
+    save();
+    res.json(d);
+  }),
+);
+dispatches.post(
+  "/:id/finalize",
+  allow("Admin", "Dispatcher"),
+  wrap((req, res) => {
+    const d = findDispatch(req.params.id);
+    if (!d) fail(404, "Not found");
+    if (d.status !== "Draft") return res.json(d);
+    const s = db.settings;
+    d.inventory = calc.processInventory(d.inventory);
+    d.summary = calc.totals(d.inventory, d.summary.loadingAndRoyaltyFees);
+    d.businessSnapshot = {
+      businessName: s.businessName,
+      address: s.address,
+      phone: s.phone,
+      bankDetails: s.bankDetails || "",
+      gstNumber: s.gstNumber,
+      tradeLicense: s.tradeLicense,
+      // The mock never stores a logo; the real API writes { sha256, width, height, bytes }.
+      logo: null,
+    };
+    Object.assign(d, { status: "Dispatched", updatedAt: now() });
+    rememberMockReferences(d.logistics);
+    save();
+    res.json(d);
+  }),
+);
+dispatches.patch(
+  "/:id/status",
+  allow("Admin", "Dispatcher"),
+  wrap((req, res) => {
+    // Mirrors dispatchController.updateStatus.
+    const to = req.body.status;
+    if (typeof to !== "string" || !STATUS_TARGETS.includes(to))
+      fail(400, "Invalid status transition");
+    const d = findDispatch(req.params.id);
+    if (!d) fail(404, "Not found");
+    if (req.body.updatedAt !== undefined) {
+      const clientTime = new Date(req.body.updatedAt).getTime();
+      if (clientTime !== new Date(d.updatedAt).getTime())
+        fail(409, "Load changed. Refresh and try again.");
+    }
+    const rejected = statusTransitionError(d.status, to, currentUser().role);
+    if (rejected) fail(rejected.status, rejected.error);
+    Object.assign(d, { status: to, updatedAt: now() });
+    save();
+    res.json(d);
+  }),
+);
+api.use("/dispatches", requireSession, dispatches);
+
+// ---- loading lists ----
+const STATUSES = ["Draft", "Loading", "Completed"];
+function listFields(body) {
+  const data = {};
+  for (const key of ["supervisor", "buyerDestination", "stoneType", "finish"])
+    data[key] = calc.text(body[key], key === "supervisor" ? "manager" : key);
+  const date = body.date === undefined ? new Date() : new Date(body.date);
+  if (!Number.isFinite(date.getTime())) calc.bad("Invalid date");
+  data.date = date.toISOString();
+  data.status = body.status || "Draft";
+  if (!STATUSES.includes(data.status)) calc.bad("Invalid status");
+  if (!Array.isArray(body.requirements))
+    calc.bad("Requirements must be a list");
+  data.requirements = body.requirements.map((row) => {
+    if (
+      !row ||
+      typeof row !== "object" ||
+      (row.loadedPieces !== undefined && !Array.isArray(row.loadedPieces))
+    )
+      calc.bad("Invalid requirement");
+    const lengthFt = calc.number(row.lengthFt, "length"),
+      widthFt = calc.number(row.widthFt, "width");
+    const requiredQuantity = calc.number(row.requiredQuantity, "quantity");
+    if (
+      lengthFt <= 0 ||
+      widthFt <= 0 ||
+      !Number.isSafeInteger(requiredQuantity)
+    )
+      calc.bad("Invalid dimensions or quantity");
+    const loadedPieces = (row.loadedPieces || []).map((p) => {
+      if (!p || typeof p !== "object") calc.bad("Invalid piece");
+      const l = calc.number(p.lengthFt, "length"),
+        w = calc.number(p.widthFt, "width");
+      if (l <= 0 || w <= 0) calc.bad("Invalid dimensions");
+      return {
+        lengthFt: l,
+        widthFt: w,
+        sqFt: round2(calc.number(l * w, "area")),
+        lengthDisplay: String(l),
+        widthDisplay: String(w),
+      };
+    });
+    const loadedQuantity =
+      row.loadedQuantity === undefined
+        ? loadedPieces.length
+        : calc.number(row.loadedQuantity, "loaded quantity");
+    if (!Number.isSafeInteger(loadedQuantity))
+      calc.bad("Invalid loaded quantity");
+    return {
+      id: typeof row.id === "string" ? row.id : randomUUID(),
+      lengthFt,
+      widthFt,
+      lengthDisplay: String(lengthFt),
+      widthDisplay: String(widthFt),
+      requiredQuantity,
+      loadedQuantity,
+      balance: requiredQuantity - loadedQuantity,
+      loadedPieces,
+    };
+  });
+  return data;
+}
+const findList = (id) => db.loadingLists.find((l) => l.id === id);
+const lists = express.Router();
+lists.get("/", wrap((req, res) => {
+  const { loadingListQuery, summaryFields } = require('../utils/loadingListQuery');
+  const {limit,cursor,status,search}=loadingListQuery(req.query);
+  let rows=db.loadingLists.filter(l=>(!status||l.status===status)&&(!search||[l.loadingListNumber,l.buyerDestination,l.supervisor].some(v=>v?.toLowerCase().includes(search.toLowerCase())))).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)||b.id.localeCompare(a.id));
+  if(cursor){const i=rows.findIndex(l=>l.id===cursor);if(i<0)fail(400,'Invalid cursor');rows=rows.slice(i+1);}
+  const more=rows.length>limit;const data=rows.slice(0,limit).map(l=>Object.fromEntries(Object.keys(summaryFields).map(k=>[k,l[k]])));
+  res.json({data,nextCursor:more?data.at(-1).id:null});
+}));
+lists.get(
+  "/:id",
+  wrap((req, res) => {
+    const l = findList(req.params.id);
+    if (!l) fail(404, "Not found");
+    res.json(l);
+  }),
+);
+lists.post(
+  "/",
+  wrap((req, res) => {
+    const list = {
+      id: randomUUID(),
+      organizationId: ORG,
+      ...listFields(req.body),
+      loadingListNumber: req.body.loadingListNumber
+        ? calc.text(req.body.loadingListNumber, "loading number")
+        : "LL-" + randomUUID(),
+      createdAt: now(),
+      updatedAt: now(),
+    };
+    db.loadingLists.unshift(list);
+    save();
+    res.status(201).json(list);
+  }),
+);
+lists.put(
+  "/:id",
+  wrap((req, res) => {
+    const l = findList(req.params.id);
+    if (!l) fail(404, "Not found");
+    Object.assign(l, listFields({ ...l, ...req.body }), { updatedAt: now() });
+    save();
+    res.json(l);
+  }),
+);
+lists.delete(
+  "/:id",
+  allow("Admin"),
+  wrap((req, res) => {
+    if (!findList(req.params.id)) fail(404, "Not found");
+    db.loadingLists = db.loadingLists.filter((l) => l.id !== req.params.id);
+    save();
+    res.json({ message: "Deleted successfully" });
+  }),
+);
+lists.patch(
+  "/:id/status",
+  allow("Admin", "Dispatcher"),
+  wrap((req, res) => {
+    if (!STATUSES.includes(req.body.status)) fail(400, "Invalid status");
+    const l = findList(req.params.id);
+    if (!l) fail(404, "Not found");
+    Object.assign(l, { status: req.body.status, updatedAt: now() });
+    save();
+    res.json(l);
+  }),
+);
+api.use("/loading-lists", requireSession, lists);
+
+app.use("/api", api);
+app.get("/healthz", (req, res) => res.json({ ok: true }));
+app.use((err, req, res, next) =>
+  res.status(err.status || 500).json({ error: err.message }),
+);
+
+app.listen(PORT, (error) => {
+  if (error) {
+    console.error(
+      `Failed to start mock server on port ${PORT}: ${error.message}`,
+    );
+    process.exit(1);
+  }
+  console.log(
+    `Mock StoneDesk API running on http://localhost:${PORT} (data: ${DATA_FILE})`,
+  );
+});

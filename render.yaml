@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: stonedesk
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm --prefix Backend ci && npm --prefix Frontend ci && npm --prefix Frontend run build
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    autoDeployTrigger: off
+    envVars:
+      - key: NODE_VERSION
+        value: 22.22.0
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: TRUST_PROXY
+        value: '1'
+      - key: APP_ORIGIN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false

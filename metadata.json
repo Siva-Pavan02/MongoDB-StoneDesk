@@ -1,0 +1,7 @@
+{
+  "name": "StoneDesk",
+  "description": "Loads, Bills, and Dispatch Management with Mock Server",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

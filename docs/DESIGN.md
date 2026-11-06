@@ -1,0 +1,73 @@
+# StoneDesk design system
+
+## 1. Visual theme and atmosphere
+
+A practical yard ledger, made clear enough to read outdoors. Restrained density (6/10), predictable layout (3/10), minimal motion (1/10). The business identity leads; operational controls come before decorative content. The interface remains a single mobile column, centered at a maximum 512px on larger screens. There is no desktop dashboard expansion or dark mode.
+
+## 2. Color palette and roles
+
+Tokens live in `Frontend/src/index.css` (`:root`) and are used under the `.pilot` scope.
+
+| Token | CSS variable | Value | Purpose |
+| --- | --- | --- | --- |
+| Yard canvas | `--ui-canvas` | `#F7F9F8` | Workspace page background |
+| Paper | `--ui-surface` | `#FFFFFF` | Cards, dialogs, inputs and navigation |
+| Ink | `--ui-ink` | `#203D36` | Primary labels, figures, body text |
+| Muted ink | `--ui-muted` | `#526661` | Explanations and metadata |
+| Border | `--workspace-border` | `#E2E8E5` | 1px input, card and divider lines |
+| Yard green | `--ui-accent` | `#17645D` | One brand accent: primary actions, active navigation, 2px focus outline |
+| Yard green hover | - | `#134E4A` | Primary button hover |
+| Focus ring | - | `rgb(23 100 93 / .12)` | 3px input focus glow |
+| Error | - | `#8B3333` on `#FFF7F7`, border `#EFCECE` | Error messages only, paired with text explanation |
+
+Status uses words as well as color. Red is reserved for errors, not an additional brand accent. The reference bill's muted red wordmark is a document branding treatment, separate from software navigation.
+
+## 3. Typography
+
+Use Geist (and Geist Mono for figures where needed), loaded in `index.css`, with sans-serif fallbacks. Do not introduce another webfont or typography package. The interface is English only and the document language is `en`.
+
+| Use | Size / line height | Weight |
+| --- | --- | --- |
+| Landing headline | 36–48px / 1.12 | 700 |
+| Screen title | 24px / 32px | 700 |
+| Section title | 18–20px / 28px | 700 |
+| Body and input text | 16px / 24px | 400–600 |
+| Supporting text | 14px / 21px | 400–600 |
+| Nonessential metadata | 12px / 18px | 400 |
+| Short section eyebrow | 11px / 16px | 700; modest tracking |
+
+Numbers use tabular figures. Amounts use Indian grouping and two decimal places where financial precision matters. Reserve serif lettering for the printable business wordmark; all app screens use sans-serif.
+
+## 4. Components
+
+- Buttons: one set, rendered by `<Button>` in `Controls.jsx`. All are 44px tall pills (`--ui-radius-button`), 13px/500 labels, stable width while busy. Variants: `primary` (green fill, white text, one per section), `secondary` (default; white, gray border), `ghost` (no border or fill until hover), `danger` (red fill, confirm step only) and `danger-quiet` (red text, the trigger before a confirm). Screens never restyle these; colours live once in `index.css`. Inline link actions use `.text-button` (green text, underline on hover). Use a visible focus outline, pressed feedback and a disabled HTML state while submitting. No hover-only actions.
+- Back: one control, `<BackButton>` (arrow + label such as "Back to dashboard"), placed first in the screen heading, on its own line above the title.
+- Inputs: labels above controls, 16px text, white fill, 1px `--workspace-border` border, 44px height, green border and soft ring on focus. Native email, password, date, number, file and select controls. Keep fractions available on dimension entry. Never use a placeholder as the only label.
+- Cards: white with a 1px border and no shadow, 16px corners (`--ui-radius-md`) and 16 to 20px padding. Use them to group a load or a task; use dividers inside groups instead of nested cards.
+- One theme on every screen. Profile, Settings and the bill panels keep their layout variables (`--mn-*`, `--bill-*`), but these alias the shared `--ui-*` role tokens (canvas, border, ink, muted, danger, success, warning), so they match the rest of the app. Tailwind utilities use the matching `@theme` colours (`text-on-surface`, `bg-surface`, `text-error` …), never raw palette classes like `text-gray-600` or `bg-teal-700`.
+- Navigation: collapsible side drawer for all five destinations; four compact bottom destinations for daily work. Settings is available in the drawer/profile area. All hit areas are at least 48px tall.
+- Dialogs: native modal dialog for sign-in, navigation and information. Browser focus containment, Escape to close, labeled title, visible close button. The scrim is 50% ink. No hand-built focus trap.
+- Data: load cards on phones, containing lorry number, party, date, area, amount and textual status. The generated PDF and Excel are the detailed tabular views. Right-align numerical columns, repeat headings on new PDF pages, and preserve numeric Excel cells.
+- Empty states: explain the next action. Search with no matches suggests lorry, party or bill ID. Empty invoices direct the user to create and finalize a load.
+- Errors: retain input, use an alert with a concrete message, offer retry where useful. Native field validity handles basic required fields; the server validates all financial input and access permissions.
+- Loading: reserve screen space; show a short status and neutral skeleton blocks. Submission controls say Saving or Preparing and prevent repeat taps.
+
+## 5. Layout
+
+Use a 4px base spacing scale: 8px related controls, 12px compact groups, 16px cards/gutters, 24px sections, 32–40px landing sections. No horizontal page overflow at 320px. A two-column summary is permitted for short numbers; forms remain single column. Bottom navigation has safe-area padding and matching content clearance.
+
+The utility header contains business identity, notifications and search. Search accepts lorry number, party, destination or bill ID. The adjacent plus button starts a load. The mobile drawer also provides the signed-in profile, role and logout.
+
+## 6. Motion and accessibility
+
+Use CSS transitions: 160ms (`--ui-dur`) color and press feedback (`scale(.98)`). Motion is limited to the landing page (`pilot/MarketingMotion.jsx`) and light transitions in `SettingsScreen.jsx`, using the `motion` package with `useReducedMotion`. Honor reduced motion. Avoid perpetual animation during yard entry, animated counters, parallax, and staggered movement of operational rows. This prioritizes the UI/UX skill's accessibility and task-focus rules over decorative motion suggestions from taste-design.
+
+Visible keyboard focus, a skip link, semantic headings/labels, text status indicators, native dialogs, and 48px hit areas are required. Test at 320px and 390px plus landscape. Long business names and labels wrap without covering controls.
+
+## 7. Deliberate exclusions
+
+No neon colors, gradients, emoji icons, fake counters, fabricated testimonials, invented security certifications, or stock photos pretending to show customer yards. Social proof needs real, approved customer evidence. No dark mode, custom date picker, chart library or desktop sidebar framework for this pilot. The `motion` package is the only animation dependency and stays out of yard data-entry screens.
+
+## 8. Library decision
+
+Keep React, Tailwind v4, daisyUI 5 (button, input, card only), Motion, jsPDF/AutoTable and SheetJS already installed. Native dialog and form controls cover the current interaction requirements with no new dependencies. The pick-ui-library curated choice for more complex accessible primitives is [Base UI](https://base-ui.com/react/components/dialog); consider it if nested menus or richer dialog behavior become necessary. Do not replace working daisyUI controls to introduce it now. daisyUI's [button](https://daisyui.com/components/button/), [input](https://daisyui.com/components/input/) and [card](https://daisyui.com/components/card/) patterns remain the base.

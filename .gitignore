@@ -1,0 +1,61 @@
+# Dependencies and builds
+**/node_modules/
+**/dist/
+**/coverage/
+*.tsbuildinfo
+
+# Environment (keep examples)
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.test.example
+
+# Runtime data
+**/uploads/
+Backend/mock/mock-data.json
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+output/
+tmp/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# Tooling output
+/graphify-out/
+.playwright-cli/
+.vercel/
+test-results/
+playwright-report/
+.kiro/
+.kiro
+
+# Local agent skills and files
+.agents/
+.claude/
+.gemini/
+.cursor/
+.windsurf/
+skills-lock.json
+AGENTS.md
+PILOT.md
+ponytail/
+skills/
+
+# Stitch files
+.stitch/
+
+# Unwanted scripts
+apply*.js
+convert.js
+split.js
+testFraction.js
