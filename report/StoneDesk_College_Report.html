@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>StoneDesk: Dispatch and Billing Management System</title>
+<style>
+@page { size: A4; margin: 20mm 17mm 18mm; }
+* { box-sizing: border-box; }
+body { font-family: Arial, Helvetica, sans-serif; color: #000; line-height: 1.48; font-size: 10.5pt; margin: 0; }
+h1, h2, h3 { color: #000; line-height: 1.2; }
+h1 { font-size: 25pt; margin: 0 0 14px; }
+h2 { font-size: 16pt; border-bottom: 1px solid #000; padding-bottom: 5px; margin-top: 20px; }
+h3 { font-size: 12pt; margin-top: 16px; }
+p { margin: 7px 0; text-align: justify; }
+ul, ol { margin-top: 5px; }
+li { margin: 3px 0; }
+.cover { height: 245mm; display: flex; flex-direction: column; justify-content: center; text-align: center; page-break-after: always; }
+.cover h1 { font-size: 28pt; max-width: 650px; margin: 0 auto 16px; }
+.cover h2 { border: 0; font-size: 16pt; color: #000; margin: 5px 0 35px; }
+.cover .meta { font-size: 12pt; line-height: 1.8; }
+.cover .university { margin-top: 45px; font-weight: bold; font-size: 14pt; color: #000; }
+.page-break { page-break-before: always; }
+.toc li { list-style: none; margin: 6px 0; }
+.toc li span { float: right; color: #000; }
+.abstract { border: 1px solid #000; padding: 14px 16px; }
+.callout { border: 1px solid #000; padding: 10px 13px; margin: 10px 0; }
+table { width: 100%; border-collapse: collapse; margin: 10px 0 15px; font-size: 9.5pt; }
+th { background: #fff; color: #000; text-align: left; }
+th, td { border: 1px solid #000; padding: 7px 8px; vertical-align: top; }
+tr:nth-child(even) td { background: #fff; }
+code, pre { font-family: Consolas, "Courier New", monospace; }
+code { color: #000; background: #fff; padding: 1px 3px; }
+pre { background: #fff; color: #000; border: 1px solid #000; padding: 11px 13px; white-space: pre-wrap; font-size: 8.5pt; line-height: 1.35; }
+.diagram { display: none; }
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.small { font-size: 9pt; color: #000; }
+.signature { margin-top: 55px; display: flex; justify-content: space-between; }
+.signature div { width: 38%; border-top: 1px solid #444; padding-top: 6px; text-align: center; }
+.references li { margin-bottom: 7px; }
+.footer-note { color: #000; font-size: 8.5pt; margin-top: 18px; }
+@media print { a { color: inherit; text-decoration: none; } .no-print { display: none; } }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="university">LOVELY PROFESSIONAL UNIVERSITY</div>
+  <div>College Project Report</div>
+  <h1>StoneDesk: Dispatch and Billing Management System</h1>
+  <h2>A web-based multi-tenant system for stone-load operations, billing, and business administration</h2>
+  <div class="meta">
+    <strong>Submitted by</strong><br>
+    Siva Pavan Kumar Reddy Lingala<br>
+    Register Number: K23WS - 34<br><br>
+    <strong>Academic Year</strong><br>
+    2026–2027
+  </div>
+</section>
+
+<section>
+  <h1>Declaration</h1>
+  <p>I hereby declare that this project report titled <strong>“StoneDesk: Dispatch and Billing Management System”</strong> is a true summary of the work carried out for academic purposes. The implementation, design decisions, testing approach, and technical discussion presented in this report are based on the project source code and supporting project documentation.</p>
+  <div class="signature">
+    <div>Student Signature</div><div>Date</div>
+  </div>
+</section>
+
+<section class="page-break">
+  <h1>Acknowledgement</h1>
+  <p>I would like to express my sincere gratitude to Lovely Professional University for providing the academic environment and resources needed to complete this project. I also thank the faculty members and project reviewers for their guidance and feedback.</p>
+  <p>I am grateful to everyone who contributed suggestions during the design, implementation, database integration, and testing stages of StoneDesk.</p>
+</section>
+
+<section class="page-break">
+  <h1>Abstract</h1>
+  <div class="abstract">
+    <p>StoneDesk is a web-based dispatch and billing management system designed for businesses that handle stone loads, trucks, destinations, loading requirements, and customer invoices. The system replaces fragmented manual workflows with a centralized application that supports authenticated users, organization-level data isolation, draft and finalized dispatches, loading lists, invoice payments, saved business references, audit logging, and business settings.</p>
+    <p>The backend is implemented with Node.js and Express. MongoDB is used as the persistence layer through Mongoose schemas and a compatibility data adapter. The frontend is implemented as a React single-page application. The system follows a multi-tenant model in which each organization owns its settings, users, dispatch records, loading lists, payments, and audit history. Server-side validation and calculation ensure that billing totals are not trusted from the browser.</p>
+  </div>
+  <p><strong>Keywords:</strong> MongoDB, Mongoose, Express, React, multi-tenancy, dispatch management, billing, REST API, authentication.</p>
+</section>
+
+<section class="page-break toc">
+  <h1>Table of Contents</h1>
+  <ol>
+    <li>Introduction <span>1</span></li>
+    <li>Existing System and Literature Review <span>2</span></li>
+    <li>Requirements and Feasibility <span>3</span></li>
+    <li>System Architecture <span>4</span></li>
+    <li>MongoDB and Database Design <span>5</span></li>
+    <li>Implementation Details <span>7</span></li>
+    <li>Testing and Validation <span>9</span></li>
+    <li>Security and Multi-Tenancy <span>11</span></li>
+    <li>Results and Discussion <span>12</span></li>
+    <li>Conclusion and Future Scope <span>13</span></li>
+    <li>References <span>14</span></li>
+  </ol>
+</section>
+
+<section class="page-break">
+  <h2>1. Introduction</h2>
+  <h3>1.1 Background</h3>
+  <p>Stone and construction-material businesses frequently manage truck movements, customer destinations, measurements, material rates, invoices, and payments at the same time. When these activities are handled through paper records or disconnected spreadsheets, errors can occur in totals, status tracking, historical branding, and access control.</p>
+  <p>StoneDesk addresses this problem through a single web application. A user can create a draft load, enter inventory measurements, calculate totals, finalize a dispatch, update delivery status, record payments, and maintain organization settings.</p>
+  <h3>1.2 Objectives</h3>
+  <ul>
+    <li>Digitize stone dispatch and billing operations.</li>
+    <li>Provide role-based access for administrators, yard managers, and dispatchers.</li>
+    <li>Maintain strict organization-level data isolation.</li>
+    <li>Calculate measurements and totals on the server.</li>
+    <li>Support draft editing, finalization, revision history, and payment tracking.</li>
+    <li>Provide searchable and paginated lists for operational records.</li>
+  </ul>
+  <h3>1.3 Scope</h3>
+  <p>The scope includes authentication, business profile settings, product rates, dispatches, loading lists, invoice payments, audit records, logo storage, and responsive frontend workflows. It does not attempt to replace accounting software or external payment gateways.</p>
+</section>
+
+<section class="page-break">
+  <h2>2. Existing System and Literature Review</h2>
+  <h3>2.1 Existing approach</h3>
+  <p>In a manual workflow, dispatch details may be recorded in notebooks, spreadsheets, or separate messaging channels. Such workflows make it difficult to guarantee that totals are consistent, that only authorized staff can edit records, and that historical invoices retain the correct business information.</p>
+  <h3>2.2 Proposed approach</h3>
+  <p>StoneDesk introduces a centralized REST API and a browser-based interface. MongoDB stores flexible operational documents, while Mongoose schemas provide validation, indexes, and persistence. The application adds server-side calculations, optimistic concurrency checks, organization filters, and audit events.</p>
+  <h3>2.3 Technology selection</h3>
+  <table>
+    <tr><th>Technology</th><th>Role in the project</th><th>Reason for use</th></tr>
+    <tr><td>React</td><td>Frontend user interface</td><td>Component-based interface and responsive single-page workflows.</td></tr>
+    <tr><td>Node.js and Express</td><td>Backend API</td><td>Lightweight HTTP server and a clear controller/router structure.</td></tr>
+    <tr><td>MongoDB</td><td>Database</td><td>Document storage suited to nested inventory and revision data.</td></tr>
+    <tr><td>Mongoose</td><td>ODM</td><td>Schema definitions, validation, indexes, and MongoDB connectivity.</td></tr>
+    <tr><td>Node test runner</td><td>Testing</td><td>Built-in test execution without adding a separate test framework.</td></tr>
+  </table>
+</section>
+
+<section class="page-break">
+  <h2>3. Requirements and Feasibility</h2>
+  <h3>3.1 Functional requirements</h3>
+  <ul>
+    <li>Users can register, log in, reset passwords, and maintain sessions.</li>
+    <li>Administrators can manage business settings, products, staff, and roles.</li>
+    <li>Authorized users can create, edit, finalize, revise, and delete dispatches according to status and role.</li>
+    <li>Users can create loading lists and track Draft, Loading, and Completed states.</li>
+    <li>Authorized users can record invoice payments.</li>
+    <li>The system can search, filter, and paginate operational records.</li>
+  </ul>
+  <h3>3.2 Non-functional requirements</h3>
+  <ul>
+    <li>Data isolation between organizations.</li>
+    <li>Validation of user input and server-side financial calculations.</li>
+    <li>Reliable error responses in JSON format.</li>
+    <li>Responsive usability across desktop and mobile widths.</li>
+    <li>Indexes for common organization and date/status queries.</li>
+  </ul>
+  <h3>3.3 Feasibility</h3>
+  <p><strong>Technical feasibility:</strong> The project uses widely supported JavaScript technologies and a document database that handles nested operational data naturally.</p>
+  <p><strong>Operational feasibility:</strong> The workflow reflects common activities such as preparing a load, finalizing an invoice, and recording delivery.</p>
+  <p><strong>Economic feasibility:</strong> The application can run using standard Node.js hosting and MongoDB hosting options, reducing the need for specialized infrastructure.</p>
+</section>
+
+<section class="page-break">
+  <h2>4. System Architecture</h2>
+  <div class="diagram">
+    <svg viewBox="0 0 760 330" role="img" aria-label="StoneDesk architecture">
+      <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2e7d8f"/></marker></defs>
+      <rect x="30" y="115" width="145" height="75" rx="8" fill="#e7f2f4" stroke="#2e7d8f" stroke-width="2"/>
+      <text x="102" y="145" text-anchor="middle" font-size="16" fill="#173b57">React Frontend</text><text x="102" y="168" text-anchor="middle" font-size="12">Forms, lists, invoices</text>
+      <rect x="235" y="115" width="145" height="75" rx="8" fill="#eaf0f6" stroke="#173b57" stroke-width="2"/>
+      <text x="307" y="145" text-anchor="middle" font-size="16" fill="#173b57">Express API</text><text x="307" y="168" text-anchor="middle" font-size="12">Routes and middleware</text>
+      <rect x="440" y="45" width="145" height="75" rx="8" fill="#f3f0e5" stroke="#aa8a35" stroke-width="2"/>
+      <text x="512" y="75" text-anchor="middle" font-size="16" fill="#173b57">Controllers</text><text x="512" y="98" text-anchor="middle" font-size="12">Validation and rules</text>
+      <rect x="440" y="205" width="145" height="75" rx="8" fill="#f3f0e5" stroke="#aa8a35" stroke-width="2"/>
+      <text x="512" y="235" text-anchor="middle" font-size="16" fill="#173b57">Mongoose Adapter</text><text x="512" y="258" text-anchor="middle" font-size="12">Prisma-style interface</text>
+      <rect x="645" y="115" width="85" height="75" rx="8" fill="#e8f4e8" stroke="#4f8d55" stroke-width="2"/>
+      <text x="687" y="145" text-anchor="middle" font-size="15" fill="#173b57">MongoDB</text><text x="687" y="168" text-anchor="middle" font-size="12">Documents</text>
+      <line x1="175" y1="152" x2="235" y2="152" stroke="#2e7d8f" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="380" y1="140" x2="440" y2="95" stroke="#2e7d8f" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="512" y1="120" x2="512" y2="205" stroke="#2e7d8f" stroke-width="3" marker-end="url(#arrow)"/>
+      <line x1="585" y1="242" x2="645" y2="170" stroke="#2e7d8f" stroke-width="3" marker-end="url(#arrow)"/>
+    </svg>
+    <div class="caption">Figure 1. High-level StoneDesk architecture</div>
+  </div>
+  <p>The frontend communicates with Express API routes. Middleware performs origin checks, JSON parsing, sessions, and authorization. Controllers apply business rules and call the Mongoose data adapter. The adapter translates Prisma-style operations into Mongoose queries and persists documents in MongoDB.</p>
+</section>
+
+<section class="page-break">
+  <h2>5. MongoDB and Database Design</h2>
+  <p>The database layer is implemented using MongoDB and Mongoose. Connection lifecycle management is located in <code>Backend/utils/db.js</code>. The application reads <code>DATABASE_URL</code> and otherwise uses a local MongoDB URI for the <code>stonedesk</code> database.</p>
+  <h3>5.1 Main collections</h3>
+  <table>
+    <tr><th>Collection/model</th><th>Purpose</th><th>Important fields</th></tr>
+    <tr><td>MasterSettings</td><td>Organization root</td><td>organizationId, businessName, savedTrucks, savedDestinations, stoneRates, version</td></tr>
+    <tr><td>User</td><td>Organization members</td><td>organizationId, email, passwordHash, role, active</td></tr>
+    <tr><td>Dispatch</td><td>Truck load and invoice record</td><td>dispatchSlipNumber, logistics, inventory, summary, status, revisions</td></tr>
+    <tr><td>LoadingList</td><td>Loading requirements</td><td>loadingListNumber, requirements, status</td></tr>
+    <tr><td>InvoicePayment</td><td>Payments on finalized bills</td><td>dispatchId, amount, note, createdByUserId</td></tr>
+    <tr><td>Session</td><td>Cookie sessions</td><td>tokenHash, userId, expiresAt</td></tr>
+    <tr><td>AuditLog</td><td>Security and business history</td><td>organizationId, userId, action, timestamp, details</td></tr>
+  </table>
+  <h3>5.2 Indexing strategy</h3>
+  <p>Compound indexes begin with <code>organizationId</code> because most operational queries are tenant-scoped. Dispatch and loading-list numbers are unique within an organization. Date and status indexes support recent-record lists and dashboard queries. Session expiration uses a MongoDB TTL index on <code>expiresAt</code>.</p>
+  <pre>DispatchSchema.index({ organizationId: 1, dispatchSlipNumber: 1 }, { unique: true });
+DispatchSchema.index({ organizationId: 1, status: 1, createdAt: -1 });
+
+SessionSchema.index({ expiresAt: 1 }, { expires: 0 });</pre>
+</section>
+
+<section class="page-break">
+  <h2>5. MongoDB and Database Design (continued)</h2>
+  <h3>5.3 Entity relationship view</h3>
+  <div class="diagram">
+    <svg viewBox="0 0 760 390" role="img" aria-label="MongoDB entity relationship diagram">
+      <defs><marker id="arrow2" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#2e7d8f"/></marker></defs>
+      <g font-family="Arial">
+      <rect x="25" y="145" width="180" height="90" rx="7" fill="#eaf0f6" stroke="#173b57" stroke-width="2"/><text x="115" y="174" text-anchor="middle" font-size="17" fill="#173b57">MasterSettings</text><text x="115" y="197" text-anchor="middle" font-size="12">organizationId, rates</text><text x="115" y="216" text-anchor="middle" font-size="12">profile, references</text>
+      <rect x="290" y="25" width="180" height="90" rx="7" fill="#e7f2f4" stroke="#2e7d8f" stroke-width="2"/><text x="380" y="54" text-anchor="middle" font-size="17" fill="#173b57">User</text><text x="380" y="77" text-anchor="middle" font-size="12">role, active, credentials</text><text x="380" y="96" text-anchor="middle" font-size="12">organizationId</text>
+      <rect x="290" y="150" width="180" height="90" rx="7" fill="#e7f2f4" stroke="#2e7d8f" stroke-width="2"/><text x="380" y="179" text-anchor="middle" font-size="17" fill="#173b57">Dispatch</text><text x="380" y="202" text-anchor="middle" font-size="12">inventory, summary</text><text x="380" y="221" text-anchor="middle" font-size="12">status, revisions</text>
+      <rect x="290" y="275" width="180" height="90" rx="7" fill="#e7f2f4" stroke="#2e7d8f" stroke-width="2"/><text x="380" y="304" text-anchor="middle" font-size="17" fill="#173b57">LoadingList</text><text x="380" y="327" text-anchor="middle" font-size="12">requirements, status</text><text x="380" y="346" text-anchor="middle" font-size="12">organizationId</text>
+      <rect x="555" y="85" width="180" height="90" rx="7" fill="#f3f0e5" stroke="#aa8a35" stroke-width="2"/><text x="645" y="114" text-anchor="middle" font-size="17" fill="#173b57">InvoicePayment</text><text x="645" y="137" text-anchor="middle" font-size="12">dispatchId, amount</text><text x="645" y="156" text-anchor="middle" font-size="12">organizationId</text>
+      <rect x="555" y="230" width="180" height="90" rx="7" fill="#f3f0e5" stroke="#aa8a35" stroke-width="2"/><text x="645" y="259" text-anchor="middle" font-size="17" fill="#173b57">AuditLog</text><text x="645" y="282" text-anchor="middle" font-size="12">action, userId</text><text x="645" y="301" text-anchor="middle" font-size="12">timestamp, details</text>
+      <line x1="205" y1="165" x2="290" y2="80" stroke="#2e7d8f" stroke-width="2" marker-end="url(#arrow2)"/><line x1="205" y1="190" x2="290" y2="195" stroke="#2e7d8f" stroke-width="2" marker-end="url(#arrow2)"/><line x1="205" y1="215" x2="290" y2="315" stroke="#2e7d8f" stroke-width="2" marker-end="url(#arrow2)"/><line x1="470" y1="195" x2="555" y2="130" stroke="#2e7d8f" stroke-width="2" marker-end="url(#arrow2)"/><line x1="470" y1="210" x2="555" y2="270" stroke="#2e7d8f" stroke-width="2" marker-end="url(#arrow2)"/>
+      </g>
+    </svg>
+    <div class="caption">Figure 2. Organization-centered document relationships</div>
+  </div>
+  <h3>5.4 Data access adapter</h3>
+  <p><code>Backend/utils/prisma.js</code> exposes methods such as <code>findFirst</code>, <code>findMany</code>, <code>create</code>, <code>updateMany</code>, <code>deleteMany</code>, and <code>count</code>. It translates conditions such as <code>in</code>, <code>contains</code>, and <code>OR</code> into MongoDB operators including <code>$in</code>, <code>$regex</code>, and <code>$or</code>. This preserves controller readability while using Mongoose under the hood.</p>
+</section>
+
+<section class="page-break">
+  <h2>6. Implementation Details</h2>
+  <h3>6.1 Dispatch lifecycle</h3>
+  <ol>
+    <li><strong>Draft creation:</strong> The server validates metadata and inventory, calculates totals, and stores a Draft document.</li>
+    <li><strong>Draft update:</strong> The record is updated only if it is still Draft and its <code>updatedAt</code> matches the client version.</li>
+    <li><strong>Finalization:</strong> The server recalculates inventory and totals, creates a business snapshot, and changes status to Dispatched.</li>
+    <li><strong>Delivery:</strong> Authorized roles can move a record from Dispatched to Delivered.</li>
+    <li><strong>Revision:</strong> Finalized records preserve the previous values in a revisions array before applying new data.</li>
+  </ol>
+  <h3>6.2 Server-side calculations</h3>
+  <p>The server validates dimensions, quantities, rates, and measurement rows. Area is calculated from length, width, and quantity. Totals are generated on the server so a modified client cannot submit a false invoice amount.</p>
+  <h3>6.3 Business settings</h3>
+  <p>Master settings store business profile information, products, royalty defaults, trucks, and destinations. Saved references are deduplicated, ordered newest first, capped, and updated without causing a dispatch save to fail.</p>
+  <h3>6.4 API and error handling</h3>
+  <p>Express routes delegate work to controllers. Controllers return JSON errors with appropriate HTTP status codes. Unexpected errors are forwarded to the central error handler. List endpoints use projections to avoid returning unnecessary fields.</p>
+</section>
+
+<section class="page-break">
+  <h2>7. Testing and Validation</h2>
+  <h3>7.1 Testing tools</h3>
+  <p>The project uses Node.js built-in <code>node:test</code> and <code>node:assert/strict</code>. Backend tests run sequentially through:</p>
+  <pre>npm --prefix Backend test
+node --test --test-concurrency=1 tests/*.test.js</pre>
+  <p>The root command runs both backend and frontend suites:</p>
+  <pre>npm test</pre>
+  <h3>7.2 Backend integration testing</h3>
+  <p>Backend tests create an HTTP server from the Express application and call routes using <code>fetch()</code>. The tests connect to MongoDB through the same Mongoose connection used by the application and access records through the adapter.</p>
+  <h3>7.3 Test coverage areas</h3>
+  <table>
+    <tr><th>Area</th><th>Validation performed</th></tr>
+    <tr><td>Authentication</td><td>Signup, login, cookies, sessions, recovery, paused users.</td></tr>
+    <tr><td>Dispatches</td><td>Creation, draft updates, finalization, delivery, revision, deletion, idempotency.</td></tr>
+    <tr><td>Multi-tenancy</td><td>Organization A cannot read or modify organization B records.</td></tr>
+    <tr><td>Authorization</td><td>Admin, YardManager, and Dispatcher role behavior.</td></tr>
+    <tr><td>Database behavior</td><td>Projections, persistence, payments, settings, invitations, audit logs.</td></tr>
+    <tr><td>Calculations</td><td>Measurement validation, totals, rates, and frontend/backend parity.</td></tr>
+    <tr><td>Frontend</td><td>Invoices, exports, drafts, routes, forms, security policy, responsive UI.</td></tr>
+  </table>
+</section>
+
+<section class="page-break">
+  <h2>8. Security and Multi-Tenancy</h2>
+  <h3>8.1 Tenant isolation</h3>
+  <p>Every organization-owned query includes the current user’s <code>organizationId</code>. A record belonging to another organization is treated as unavailable and returns a 404 response instead of exposing information about its existence.</p>
+  <h3>8.2 Authentication and sessions</h3>
+  <p>Passwords are stored as derived hashes with salts. Browser sessions use an HTTP-only cookie, while MongoDB stores a hash of the session token. Sessions expire through a TTL index.</p>
+  <h3>8.3 Authorization</h3>
+  <p>Middleware checks whether the user has a valid session, is active, and has the required role. Status transitions and finalized invoice operations apply additional role rules in controllers and shared utilities.</p>
+  <h3>8.4 Input and data safety</h3>
+  <ul>
+    <li>Request bodies are validated before persistence.</li>
+    <li>Totals are calculated on the server.</li>
+    <li>Regular expressions are escaped before being used for search.</li>
+    <li>Queries use projections for list responses.</li>
+    <li>Audit logs record important security and business events.</li>
+  </ul>
+  <div class="callout"><strong>Security principle:</strong> authentication identifies the user, authorization checks the role, and tenant scoping checks the organization. All three are needed for a safe multi-tenant API.</div>
+</section>
+
+<section class="page-break">
+  <h2>9. Results and Discussion</h2>
+  <h3>9.1 Achieved results</h3>
+  <ul>
+    <li>A complete browser-based workflow for dispatch and billing operations.</li>
+    <li>Centralized MongoDB persistence through Mongoose models.</li>
+    <li>Organization-level isolation across users, dispatches, loading lists, and payments.</li>
+    <li>Server-authoritative measurements and invoice calculations.</li>
+    <li>Operational support for draft, finalized, delivered, and revised records.</li>
+    <li>Structured automated test coverage across backend and frontend behavior.</li>
+  </ul>
+  <h3>9.2 Discussion</h3>
+  <p>The document model is particularly suitable for inventory and revision data because the nested structures can be stored together with the dispatch. Compound organization indexes support the application’s access pattern. The compatibility adapter reduces migration risk, but it also means that developers must understand both the adapter contract and the underlying Mongoose behavior.</p>
+  <p>The project demonstrates that database correctness is not only about storing documents. It also depends on tenant filters, concurrency checks, validation, indexes, authorization, and tests that exercise the complete HTTP path.</p>
+</section>
+
+<section class="page-break">
+  <h2>10. Conclusion and Future Scope</h2>
+  <h3>10.1 Conclusion</h3>
+  <p>StoneDesk provides a practical foundation for digitizing stone dispatch and billing operations. Its architecture separates the frontend, API, controllers, data adapter, and MongoDB models. The use of Mongoose schemas, organization-based indexes, server-side calculations, role checks, and integration tests improves reliability and maintainability.</p>
+  <h3>10.2 Future scope</h3>
+  <ul>
+    <li>Introduce a dedicated reporting dashboard with exportable organization analytics.</li>
+    <li>Add stronger production observability for slow MongoDB queries and API latency.</li>
+    <li>Propagate Mongoose sessions explicitly through every operation that participates in a transaction.</li>
+    <li>Add configurable tax, invoice numbering, and accounting-system integrations.</li>
+    <li>Support cloud object storage for production logo and document assets.</li>
+    <li>Provide mobile-focused offline support for yard operations.</li>
+    <li>Expand automated accessibility and browser compatibility testing.</li>
+  </ul>
+</section>
+
+<section class="page-break">
+  <h2>References</h2>
+  <ol class="references">
+    <li>StoneDesk project source code, <code>Backend/</code> and <code>Frontend/</code> directories.</li>
+    <li>StoneDesk Technical Architecture, <code>docs/ARCHITECTURE.md</code>.</li>
+    <li>StoneDesk Business Workflows, <code>docs/BUSINESS-WORKFLOWS.md</code>.</li>
+    <li>StoneDesk backend conventions, <code>.github/instructions/backend.instructions.md</code>.</li>
+    <li>MongoDB Documentation, “MongoDB Manual,” MongoDB Inc.</li>
+    <li>Mongoose Documentation, “Mongoose ODM for MongoDB,” Automattic.</li>
+    <li>Node.js Documentation, “Test runner,” Node.js Foundation.</li>
+    <li>Express.js Documentation, “Express web framework,” OpenJS Foundation.</li>
+    <li>React Documentation, “React,” Meta Open Source.</li>
+  </ol>
+  <p class="footer-note">This report was generated from the StoneDesk project structure and source documentation. It is intended as a college-level technical report and can be supplemented with institution-specific certification, signatures, and supervisor approval pages.</p>
+</section>
+
+</body>
+</html>
