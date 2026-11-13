@@ -89,7 +89,7 @@ Use `.env.example` as the configuration starting point. `DATABASE_URL` accepts a
 
 Set `APP_ORIGIN` to the actual browser origin. Production authentication rate limiting requires working Upstash credentials. Password recovery requires SMTP configuration. Logo storage needs a writable, persistent location.
 
-Render and Vercel configuration files exist locally. Their presence does not establish that either deployment is active or correctly provisioned. `/healthz` returns an application response; it does not query MongoDB to prove database readiness.
+The Vercel configuration file exists locally. Its presence does not establish that deployment is active or correctly provisioned. `/healthz` returns an application response; it does not query MongoDB to prove database readiness.
 
 ## Security controls observed
 
@@ -140,10 +140,6 @@ Recommended follow-up: inspect deployed indexes, decide the intended scope of id
 Logos are filesystem-backed. The checked-in hosting configuration does not demonstrate persistent upload storage provisioning.
 
 Recommended follow-up: confirm writable persistent storage for the chosen host and verify that historical invoice logos remain available after a restart or deployment.
-
-### 5. Some architecture documentation remains stale
-
-`docs/ARCHITECTURE.md` still describes a Google sign-in helper absent from the listed frontend files, `SameSite=Lax` despite the current `Strict` setting, and a `SERVE_FRONTEND` condition that the current app file does not use. Treat code as the source of truth until that document is reconciled.
 
 ## Suggested next steps
 

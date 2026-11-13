@@ -1,7 +1,7 @@
 # Product Requirements Document (PRD): StoneDesk
 
 ## 1. Product Overview
-StoneDesk modernizes B2B granite supply chain logistics. It is a mobile-first, multi-tenant web app where quarry and yard businesses in Kadapa, India, log outgoing truck loads, calculate dimensional pricing, and share invoices and driver slips (for example via WhatsApp through native sharing).
+StoneDesk modernizes B2B granite supply chain logistics. It is a mobile-first, multi-tenant web app where quarry and yard businesses in Kadapa, India, log outgoing truck loads, calculate dimensional pricing, and share invoices and driver slips through the browser's native sharing when supported.
 
 ## 2. Target Audience and Environment
 * **Organization:** A stone business with its own profile, logo, rates and team. Data is isolated per organization.
@@ -14,7 +14,7 @@ StoneDesk modernizes B2B granite supply chain logistics. It is a mobile-first, m
 * **Tech Literacy:** Low to moderate. Requires a zero-learning-curve, "fat-finger proof" interface.
 
 ## 3. Core Features
-* **Accounts and teams:** Email/password or Google sign-in. Create a business or join one with its organization code. Admins change roles and pause access.
+* **Accounts and teams:** Email/password sign-in, password recovery, and team access. Create a business or join one with its organization code. Admins change roles and pause access. Google sign-in is not currently available.
 * **Business setup:** Profile (name, address, phone, GST, trade license), logo, products with stone type, finish and rate, and a default royalty / loading fee.
 * **Rapid Measurement Ledger:** Rows of `Length` x `Width` x `Quantity` grouped by product, with Regular/TOP category. Square footage and amounts are calculated live and verified on the server.
 * **Per-load rates:** Each product group carries its own rate per square foot, prefilled from the product's default rate.
@@ -23,7 +23,7 @@ StoneDesk modernizes B2B granite supply chain logistics. It is a mobile-first, m
 * **Dual Document Generation:**
   * **Driver Transit Slip:** PDF with vehicle details, destination and stone dimensions/pieces (prices hidden).
   * **Buyer Financial Invoice:** PDF, Excel and printable A4 invoice with dimensions, pricing and total payable amount.
-* **Sharing:** One-tap sharing of generated files through the Web Share API (WhatsApp and other apps).
+* **Sharing:** One-tap sharing of generated files through the Web Share API when supported; downloads remain the fallback.
 * **Loading requirements:** Lists of required sizes and quantities with loaded pieces and balance, exportable to PDF and Excel.
 * **Dashboard:** Load list with search and status filter, plus 30-day analytics (status counts, daily totals, top destinations).
 * **Draft recovery:** Unsaved load input is kept on the device and can be resumed.

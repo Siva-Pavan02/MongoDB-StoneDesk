@@ -60,7 +60,6 @@ StoneDesk/
       lib/
         pilotApi.js             Fetch wrapper used by the pilot app
         api.js, loadingListApi.js   Clients used by LoadingListScreen / NewLoad
-        googleSignIn.js         Google PKCE redirect helpers
       utils/                    Calculations, drafts and document exports (see section 6)
         workspaceRoutes.js      Hash route, tab and navigation helpers
         truckPlate.js           Truck plate formatting and validation
@@ -83,7 +82,7 @@ StoneDesk/
    - `/api/loading-lists` (session + active user)
 6. `/uploads/logos/<sha256>.png`: session + active user, then the object `org/<session organization>/<sha256>.png` (404 if missing) with `private, max-age=31536000, immutable`. Finalized bills reference these by `businessSnapshot.logo.sha256`, so historical logos stay viewable for the same organization.
    `/uploads/<uuid>.png` (legacy): session + active user + current-logo check, then static files from `UPLOAD_DIR`, with `private, no-store`.
-7. When `SERVE_FRONTEND=true`, serves `Frontend/dist` with an SPA fallback.
+7. The root `server.js` serves `Frontend/dist` with an SPA fallback after a production build; `Backend/app.js` does not use a `SERVE_FRONTEND` switch.
 8. Central error handler (`utils/errorHandler.js`).
 
 Default port is `5000`. In development, Vite (port 5173) proxies `/api` to the backend.
@@ -104,7 +103,7 @@ Every query on tenant data is scoped by the caller's `organizationId`.
 
 ## 4. Security
 
-- **Sessions:** `stonedesk_session` cookie, `httpOnly`, `SameSite=Lax`, 12 hours. Only a hash of the token is stored.
+- **Sessions:** `stonedesk_session` cookie, `httpOnly`, `SameSite=Strict`, 12 hours. Only a hash of the token is stored.
 - **Passwords:** scrypt (N=32768). 12 to 128 characters with a zxcvbn score of at least 3.
 - **Rate limiting:** 20 requests per 15 minutes on auth endpoints (Upstash Redis; in-memory fallback with LRU eviction).
 - **Authorization:** `requireSession`, `requireActive` (paused users get 403 on workspace APIs) and `allowRoles(...)`.
@@ -120,11 +119,11 @@ Every query on tenant data is scoped by the caller's `organizationId`.
 | `#entries` | `LoadHub` | Load list, `?status=` filter, cursor pagination |
 | `#load` | `NewLoad` + `MeasurementEntry` + `LoadSummary` | Create or edit a draft load |
 | `#bill/:id` | `BillView` | Bill preview, finalize, PDF/Excel/share |
-| `#products`, `#products/...` | (redirect) | Legacy aliases; replaced with `#settings/products` |
+| `#products`, `#products/...` | (redirect) | Legacy aliases; replaced with `#load` |
 | `#profile` | `BusinessSetup` | Admin only; Profile settings (sidebar item): business profile, logo and default charges |
-| `#references` | (redirect) | Legacy alias; replaced with `#settings/products` |
+| `#references` | (redirect) | Legacy alias; replaced with `#load` |
 | `#requirements` | `LoadingListScreen` | Loading requirement lists |
-| `#settings/...` | `AccountSettings` | Organization, Products & rates (`#settings/products`, `ProductSettings`: Admin full, Manager add-only, hidden for Dispatcher), team members, account, delete |
+| `#settings/...` | `AccountSettings` | Organization, Products & rates, team members, account and delete; product management is also available from New load |
 
 `WorkspaceShell.jsx` provides the header and drawer navigation: Profile (Admin), Dashboard, New load, Loading entries, Settings. The New load item runs the same `newLoad()` as the header button. Until the business has a name, the app redirects to setup (`#profile`); a business without products can still open New load. Truck numbers and destinations are remembered automatically when a load is saved and offered as New load suggestions. Unsaved load drafts are kept in `localStorage` (`utils/pilotDraft.js`) and offered for recovery.
 
@@ -138,7 +137,7 @@ Every query on tenant data is scoped by the caller's `organizationId`.
 
 | Area | Variables |
 | --- | --- |
-| Backend server | `PORT`, `NODE_ENV`, `APP_ORIGIN`, `TRUST_PROXY`, `SERVE_FRONTEND`, `UPLOAD_DIR` |
+| Backend server | `PORT`, `NODE_ENV`, `APP_ORIGIN`, `TRUST_PROXY`, `UPLOAD_DIR` |
 | Database | `DATABASE_URL` (MongoDB connection URI) |
 | Rate limiting | `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` |
 | Email | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` |

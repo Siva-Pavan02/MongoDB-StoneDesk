@@ -12,7 +12,6 @@ test('Vercel response headers match the shared policy and use Vercel backend rew
     { source: '/uploads/(.*)', destination: 'https://stonedesk-api.vercel.app/uploads/$1' },
     { source: '/(.*)', destination: '/index.html' },
   ]);
-  assert.ok(!JSON.stringify(config.rewrites).includes('onrender.com'));
 });
 
 test('production CSP constrains scripts while retaining fonts, logos and the configured API', () => {

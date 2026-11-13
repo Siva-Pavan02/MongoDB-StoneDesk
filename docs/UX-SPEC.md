@@ -19,18 +19,15 @@ flowchart TD
     Active -->|Yes| Home
     Pending -->|Admin reactivates in Settings| Home
     Home --> Loads[Loading entries / search]
-    Home --> Monitor[Monitor and dispatch]
-    Home --> Invoices[Invoices]
+    Home --> Entries[Loading entries and status filters]
     Home --> Settings[Business / products / team / password]
     Home --> New[New Load or recover unfinished load]
     New --> Review[Review quantities / TOP / totals / charges]
     Review --> Draft[Save draft]
     Draft --> Loads
     Review -->|Admin or Dispatcher| Final[Finalize and dispatch]
-    Final --> Invoices
-    Final --> Monitor
-    Monitor --> Delivered[Mark delivered]
-    Invoices --> Export[Choose buyer PDF / Excel / driver PDF]
+    Final --> Entries
+    Entries --> Export[Open finalized bill and choose buyer PDF / Excel / driver PDF]
     Export --> Download[Download or native file share]
 ```
 
@@ -45,7 +42,7 @@ Mobile reading order:
 3. Example ledger card: clearly marked EXAMPLE LOAD, showing `3 × 2 ft`, 19 pieces and 114 sq ft. This is a calculation illustration, not a live customer metric.
 4. Three vertical feature sections: Log the load; Keep dispatch moving; Finish with a clear bill. Each uses a consistent outline icon and a short explanation.
 5. Record-integrity panel: account approval and locked finalized values, followed by Sign Up.
-6. Footer: Privacy, pilot Terms and Contact open readable information dialogs. No invented contact address or certification. Public legal terms and support details require owner-supplied text before public launch.
+6. Footer: Privacy, pilot Terms and Support open readable information dialogs. No invented contact address or certification. Public legal terms and support details require owner-supplied text before public launch.
 
 The requested social-proof area is intentionally not populated with fabricated testimonials or usage numbers. Add an approved customer quote and a measured statistic when those exist.
 
@@ -55,7 +52,7 @@ The requested social-proof area is intentionally not populated with fabricated t
 
 - Native dialog; title, explanation, name on signup, email, password, show-password checkbox, primary submit, mode switch and Close.
 - Minimum 12-character password; support paste and password managers. Password values are not stored in browser localStorage.
-- Email/password works locally. Google and Phone OTP are unavailable until a provider is connected, following the user's decision to start locally. No email verification or email reset service is implied.
+- Email/password works locally. Google and Phone OTP are unavailable. Password reset is supported when the installation has SMTP configured; email verification is not implemented.
 - First account becomes owner/Admin. Further accounts start active as Dispatchers. Administrators can pause access or change roles; paused users cannot read business records.
 - Expired sessions return to login. The existing load recovery copy stays on the device.
 
@@ -72,7 +69,7 @@ Previous step preserves input. Editing the profile uses the same wizard. GST is 
 
 ## Workspace and navigation
 
-The header stays structurally consistent across pages. A mobile drawer contains Dashboard, Loading entries, Monitor & dispatch, Invoices and Settings. A four-item bottom bar supports frequent daily navigation. The profile area identifies the current person and role; switching people uses logout/login.
+The header stays structurally consistent across pages. A mobile drawer contains Dashboard, Loading entries and Settings, with Profile shown for Admins. Status filters in Loading entries provide the monitor/dispatch view, and finalized bills open from the same list rather than a separate Invoices screen. The profile area identifies the current person and role; switching people uses logout/login.
 
 Search matches lorry number, party name, destination and full bill ID. Submit moves to Loading entries. Hash routes support browser Back and reopening a bill URL. Notifications show a count of drafts requiring review; no fabricated push notifications or unread badge.
 
@@ -89,7 +86,9 @@ Search matches lorry number, party name, destination and full bill ID. Submit mo
 
 Search plus status filters and load cards. Each card shows lorry, party, date, area, net amount and a textual status. Draft opens a review page with Continue this draft; finalized loads open the invoice page.
 
-### Monitor & dispatch
+### Monitor & dispatch view
+
+Monitor & dispatch is the Dispatched status filter within Loading entries, not a separate route.
 
 Read saved records on entry, on Refresh, and every 30 seconds while visible. This is polling, not GPS tracking or a live telemetry feed. Errors remain visible and keep the last successful data with its update time.
 
@@ -103,7 +102,9 @@ Read saved records on entry, on Refresh, and every 30 seconds while visible. Thi
 
 Admin and Dispatcher can finalize/dispatch, then mark delivered. Manager prepares and saves drafts. Delivery changes only transport status, not bill values.
 
-### Invoices and exports
+### Finalized bills and exports
+
+Invoices are finalized bill views opened from Loading entries, not a separate navigation screen.
 
 Finalized records only. View original business snapshot and detailed measurements, then totals. A document selector offers Buyer PDF, Buyer Excel (.xlsx), and Driver PDF without prices. One Share action and one Download/Export action avoid a wall of export buttons. The generator rereads the saved record from the server before exporting.
 

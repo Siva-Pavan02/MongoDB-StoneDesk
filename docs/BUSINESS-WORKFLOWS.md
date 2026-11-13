@@ -83,7 +83,7 @@ The user types their email to confirm. An Admin deletes the entire organization 
 - **Organization to Load:** product rates prefill each load's group rates and the default royalty fee applies when none is given; the business profile is copied into the load at finalize so old bills keep the details in effect when they were issued.
 - **Load to Analytics:** finalized loads (Dispatched and Delivered) feed the 30-day analytics.
 - **Load to Documents:** the frontend builds invoices, driver slips and Excel files from the saved load; it never recalculates billed totals differently from the server (guarded by calculation parity tests).
-- **User to Sessions:** role changes, pausing, Google linking and password changes invalidate sessions.
+- **User to Sessions:** role changes, pausing and password changes invalidate sessions. Google account linking is not implemented.
 - **All actions to Audit:** sensitive actions write AuditLog entries keyed by organization and user.
 - **Browser to Server drafts:** unsaved load input is kept in `localStorage` and offered for recovery.
 
